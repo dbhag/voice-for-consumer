@@ -1,0 +1,59 @@
+[project]
+name = "proxy"
+version = "0.1.0"
+description = "A consumer's outbound voice agent — calls businesses on the user's behalf and returns confidence-scored results"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "arq>=0.26",
+    "redis>=5.0",
+    "pipecat-ai>=0.0.40",
+    "twilio>=9.0",
+    "deepgram-sdk>=3.0",
+    "openai>=1.30",
+    "anthropic>=0.30",
+    "httpx>=0.27",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "fakeredis>=2.23",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests with mocked STT/TTS/telephony (opt-in)",
+]
+addopts = "-m 'not integration'"
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "engine", "verticals"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

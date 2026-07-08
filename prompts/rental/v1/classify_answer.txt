@@ -1,0 +1,9 @@
+Classify the human's most recent answer to the given question as exactly one of: CLEAR, AMBIGUOUS, or REFUSED.
+
+- CLEAR: a specific, unhedged answer that directly addresses the question.
+- AMBIGUOUS: a vague, hedged, partial, or internally inconsistent answer (e.g. "around 2k-ish, depends on the unit") that warrants exactly one targeted clarifying follow-up.
+- REFUSED: the speaker declines to answer, says they don't know, or says someone else needs to answer.
+
+Respond with only the single classification label.
+
+NOTE: this prompt is not yet wired to a real classification LLM call in this pass — `engine/providers/mock.py`'s `MockDialogueLLMProvider` uses a deterministic keyword heuristic instead. This file exists so the real DialogueLLMProvider has prompt text to load once it lands.
