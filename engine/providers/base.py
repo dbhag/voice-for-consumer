@@ -1,6 +1,13 @@
-"""Provider seams. Real Pipecat/Twilio/Deepgram/Cartesia implementations plug
-into these same Protocols later; this pass only ships mock + LLM-extraction
-implementations.
+"""Provider seams.
+
+`VoicePlatformProvider` is the ONE bought voice-infra platform (Bland /
+Retell / Vapi) that owns telephony + STT + in-call dialogue LLM + TTS +
+turn-taking as a single product — see CLAUDE.md's Stack table. We do not
+integrate Twilio/Deepgram/Cartesia/Pipecat directly; that's a self-built
+pipeline the spec explicitly rejects.
+
+`PreCallBriefProvider` and `ExtractionProvider` are separate, bought LLM
+calls (OpenAI/Anthropic), independent of the voice platform.
 """
 
 from __future__ import annotations
@@ -8,35 +15,60 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from pydantic import BaseModel
-
-from engine.models import AnswerClassification, Question, Target, TranscriptTurn, Vertical
-
-
-class ConversationSession(Protocol):
-    async def say(self, text: str) -> None: ...
-
-    async def listen(self, *, question_id: str, is_clarify: bool = False) -> str: ...
-
-
-class TelephonyProvider(Protocol):
-    async def start_call(self, target: Target) -> ConversationSession: ...
-
-    async def end_call(self, session: ConversationSession) -> None: ...
+from engine.models import (
+    ClassifyAnswer,
+    ConverseOutcome,
+    FieldResult,
+    HoldOutcome,
+    MenuOutcome,
+    PreCallBrief,
+    Request,
+    TranscriptTurn,
+)
 
 
-class DialogueLLMProvider(Protocol):
-    async def classify_answer(
-        self, question: Question, answer_text: str, history: list[TranscriptTurn]
-    ) -> AnswerClassification: ...
+class VoiceCallSession(Protocol):
+    """One outbound call, entirely owned by the bought voice platform.
+
+    The platform runs the actual conversation (including dynamic
+    follow-up handling under the hard rule) once `converse()` is invoked
+    with the disclosure + primary question + context brief — we never
+    code a manual turn-by-turn dialogue loop ourselves.
+    """
+
+    async def classify(self) -> ClassifyAnswer: ...
+
+    async def navigate_menu(self) -> MenuOutcome: ...
+
+    async def wait_on_hold(self) -> HoldOutcome: ...
+
+    async def request_callback(self) -> None: ...
+
+    async def converse(
+        self, disclosure: str, primary_question: str, context: dict[str, object]
+    ) -> ConverseOutcome: ...
+
+    async def hangup(self) -> None: ...
+
+
+class VoicePlatformProvider(Protocol):
+    async def start_call(self, phone_number: str) -> VoiceCallSession: ...
+
+
+class PreCallBriefProvider(Protocol):
+    async def build_brief(
+        self, request: Request, hint_pack: dict[str, object] | None
+    ) -> PreCallBrief: ...
 
 
 class ExtractionProvider(Protocol):
-    async def extract(self, vertical: Vertical, transcript: list[TranscriptTurn]) -> BaseModel: ...
+    async def extract(
+        self, return_fields: list[str], transcript: list[TranscriptTurn]
+    ) -> dict[str, FieldResult]: ...
 
 
 @dataclass
 class ProviderBundle:
-    telephony: TelephonyProvider
-    dialogue: DialogueLLMProvider
+    voice_platform: VoicePlatformProvider
+    pre_call_brief: PreCallBriefProvider
     extraction: ExtractionProvider

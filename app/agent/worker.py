@@ -1,7 +1,17 @@
 def main() -> None:
-    """Boot the Pipecat voice-agent worker process. Implemented in Phase 4."""
+    """Boot the outbound-call worker process.
+
+    Implemented once a voice-infra vendor (Bland / Retell / Vapi — see
+    CLAUDE.md's Stack table) is picked after latency/IVR-navigation/cost
+    evaluation. The adapter implements `engine.providers.base
+    .VoicePlatformProvider` — engine/call_loop.py already depends only on
+    that interface, so wiring in the real vendor is a new provider module,
+    not a rewrite of the engine.
+    """
     raise NotImplementedError(
-        "agent worker lands in Phase 4 (real Pipecat/Twilio/Deepgram/TTS integration)"
+        "voice-platform adapter pending vendor choice (Bland/Retell/Vapi); "
+        "implement engine.providers.base.VoicePlatformProvider, see "
+        "engine.providers.mock.MockVoicePlatformProvider for the shape"
     )
 
 

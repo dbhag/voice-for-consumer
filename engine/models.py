@@ -1,109 +1,134 @@
-"""Vertical-agnostic domain models.
+"""Vertical-agnostic domain models for the generic outbound-calling engine.
 
-This module must never import anything vertical-specific (no rental,
-no subscription-cancellation, etc). A `Vertical` is data; the engine
-only ever sees `Vertical` instances, never vertical ids in branches.
+No vertical logic lives here. A vertical's only footprint anywhere in this
+codebase is a "hint pack" (plain data, see hint_packs/) consumed by the
+pre-call brief's completeness check — never a branch in this module or
+anywhere in engine/.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SerializeAsAny
-
-
-class AnswerType(StrEnum):
-    STR = "str"
-    FLOAT = "float"
-    INT = "int"
-    BOOL = "bool"
-    DATE = "date"
-    ENUM = "enum"
+from pydantic import BaseModel, Field
 
 
-class Question(BaseModel):
-    id: str
-    prompt: str
-    answer_type: AnswerType
-    required: bool = True
-    enum_values: list[str] | None = None
-    clarify_prompt: str | None = None
-    description: str | None = None
+class Boundaries(BaseModel):
+    read_only: bool = True
+    do_not_share: list[str] = Field(default_factory=list)
 
 
-class ExtractedField[T](BaseModel):
-    value: T | None
-    confidence: float = Field(ge=0.0, le=1.0)
-    source_span: str | None
-    needs_human_review: bool
-    reason: str | None = None
+class Request(BaseModel):
+    """The three-part input: ask + context bundle + targets, plus boundaries.
 
+    Generic by construction — no vertical field exists here. Per-vertical
+    "hint packs" enrich the pre-call brief's completeness check as a
+    data-driven bolt-on; they never shape this schema.
+    """
 
-class Vertical(BaseModel):
-    model_config = {"arbitrary_types_allowed": True}
-
-    id: str
-    goal: str
-    disclosure_script: str
-    question_set: list[Question]
-    extraction_schema: type[BaseModel]
-    result_mode: Literal["compare", "single"]
+    ask: str
+    return_fields: list[str]
+    context: dict[str, Any] = Field(default_factory=dict)
+    boundaries: Boundaries = Field(default_factory=Boundaries)
+    targets: list[str]
 
 
 class TranscriptTurn(BaseModel):
     turn_id: int
     speaker: Literal["agent", "human", "ivr"]
     text: str
-    question_id: str | None = None
-    is_clarify: bool = False
-    timestamp: datetime | None = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class Target(BaseModel):
-    id: str
-    name: str
-    phone_number: str
-    metadata: dict[str, str] = Field(default_factory=dict)
+class FieldResult(BaseModel):
+    """One returned field's value. The hard rule lives here structurally:
+    a caller can construct `value=None` freely, but never `value=<something>`
+    without `source_span` — see `engine.extraction.ground_field`.
+    """
+
+    value: Any | None
+    source_span: str | None
+    confidence: float | None = None  # P1 soft signal, not the P0 grounding gate
+    reason: str | None = None
 
 
-class Job(BaseModel):
-    id: str
-    vertical_id: str
-    targets: list[Target]
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-class CallOutcome(StrEnum):
-    COMPLETED = "completed"
-    NO_ANSWER = "no_answer"
-    VOICEMAIL = "voicemail"
-    FAILED = "failed"
-
-
-class AnswerClassification(StrEnum):
-    CLEAR = "clear"
-    AMBIGUOUS = "ambiguous"
+class TerminalState(StrEnum):
+    GOT_INFO = "got_info"
+    COULDNT_REACH = "couldnt_reach"
     REFUSED = "refused"
 
 
-class CallResult(BaseModel):
-    model_config = {"arbitrary_types_allowed": True}
+class CompletionLevel(StrEnum):
+    FULL = "full"
+    PARTIAL = "partial"
 
-    target: Target
-    outcome: CallOutcome
+
+class ReachFailure(StrEnum):
+    VOICEMAIL = "voicemail"
+    NO_ANSWER = "no_answer"
+    BUSY = "busy"
+    HOLD_ABANDONED = "hold_abandoned"
+    # IVR offered "press N, we'll call you back" and we took it (cost-saver,
+    # stops the meter). Full inbound-callback resumption into CONVERSE is
+    # P1 — v1 records this terminal state instead of blocking on it.
+    CALLBACK_PENDING = "callback_pending"
+    # Job-level per-job minute budget already spent before this target's
+    # turn came up — skipped without dialing, a cost guardrail, not a crash.
+    BUDGET_EXCEEDED = "budget_exceeded"
+
+
+class ClassifyAnswer(StrEnum):
+    HUMAN = "human"
+    IVR = "ivr"
+    HOLD = "hold"
+    VM_NO_ANSWER_BUSY = "vm_no_answer_busy"
+
+
+class MenuOutcome(StrEnum):
+    HOLD = "hold"
+    HUMAN = "human"
+    CALLBACK_OFFERED = "callback_offered"
+
+
+class HoldOutcome(StrEnum):
+    HUMAN_RETURNED = "human_returned"
+    ABANDONED = "abandoned"
+
+
+class ConverseOutcome(BaseModel):
     transcript: list[TranscriptTurn]
-    extracted: SerializeAsAny[BaseModel]
+    refused: bool = False
+    refusal_reason: str | None = None
+
+
+class CallResult(BaseModel):
+    target: str
+    terminal_state: TerminalState
+    completion_level: CompletionLevel | None = None  # set only for GOT_INFO
+    reach_failure: ReachFailure | None = None  # set only for COULDNT_REACH
+    refusal_reason: str | None = None  # set only for REFUSED
+    fields: dict[str, FieldResult] = Field(default_factory=dict)
+    transcript: list[TranscriptTurn] = Field(default_factory=list)
+    from_cache: bool = False
+    call_minutes: float = 0.0
     started_at: datetime
     ended_at: datetime | None = None
 
 
-class ComparisonResult(BaseModel):
-    vertical_id: str
+class MissingContext(BaseModel):
+    field: str
+    prompt: str
+
+
+class PreCallBrief(BaseModel):
+    primary_question: str
+    return_fields: list[str]
+    likely_follow_ups: list[str]
+    missing_context: list[MissingContext] = Field(default_factory=list)
+
+
+class JobResult(BaseModel):
+    request: Request
     results: list[CallResult]
-
-
-class SingleResult(BaseModel):
-    vertical_id: str
-    result: CallResult

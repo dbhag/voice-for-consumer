@@ -1,9 +1,7 @@
 """SQLAlchemy ORM tables mirroring the engine's Pydantic domain models.
 
-Importable only in this pass — no live DB connection or migration is
-required for `app.cli run` to work. Wiring these up (Alembic migration,
-session usage in orchestrator persistence) lands once `app/api` needs to
-read job history back.
+Wired up in `app/db/repository.py`, used by the arq worker (`app/queue/tasks.py`)
+to persist results and by the API (`app/api/routes/jobs.py`) to read them back.
 """
 
 from __future__ import annotations
@@ -22,7 +20,12 @@ class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    vertical_id: Mapped[str] = mapped_column(String, nullable=False)
+    request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    # "queued" | "running" | "done" — set by the worker at each stage so
+    # GET /jobs/{id} can report progress before results exist.
+    status: Mapped[str] = mapped_column(String, nullable=False, default="queued")
+    hint_pack_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    notify_email: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     call_results: Mapped[list[CallResultRow]] = relationship(back_populates="job")
@@ -33,10 +36,15 @@ class CallResultRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False)
-    target_id: Mapped[str] = mapped_column(String, nullable=False)
-    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    target: Mapped[str] = mapped_column(String, nullable=False)
+    terminal_state: Mapped[str] = mapped_column(String, nullable=False)
+    completion_level: Mapped[str | None] = mapped_column(String, nullable=True)
+    reach_failure: Mapped[str | None] = mapped_column(String, nullable=True)
+    refusal_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    fields: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     transcript: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
-    extracted: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    from_cache: Mapped[bool] = mapped_column(nullable=False, default=False)
+    call_minutes: Mapped[float] = mapped_column(nullable=False, default=0.0)
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

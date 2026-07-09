@@ -1,259 +1,241 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository.
+Operational guidance for Claude Code in this repository. This file encodes the v1
+product spec's decisions. When code and spec disagree, the spec wins — flag the conflict.
 
 ---
 
-## Project: Proxy — A Consumer's Outbound Voice Agent
+## Project: Proxy — v1 "Quote-Getter"
 
-**Thesis.** The entire voice-AI market is built for *businesses* to handle *customers*
-— Retell, Vapi, Bland, Sierra, PolyAI all arm the company answering the phone. Almost
-nobody has built the agent for the person on the *other* end: the one stuck in the
-phone tree, getting screened, upsold, and stonewalled. Proxy is that agent — it makes
-outbound calls to businesses *on the user's behalf*, runs the conversation, and returns
-structured, confidence-scored results.
+A **consumer outbound calling agent**. The user supplies phone numbers + context; the
+agent places the calls, survives the IVR and hold, gathers the answers, and reports back
+a ranked result. **Read-only, disclosed, async, one metro.**
 
-**Why now.** This is the 2018 Google Duplex demo that never shipped. Back then latency
-and open-ended dialogue weren't good enough. In 2026 latency is ~600ms and LLMs handle
-unscripted conversation — the tech finally caught up to the idea.
+**Thesis.** The whole voice-AI market arms *businesses* against *customers* (Retell, Vapi,
+Bland, Sierra all answer calls for companies). Proxy is the agent for the person on the
+other end — it makes the calls *for the user*. v1 proves the engine on phone-locked info
+(quotes, live availability, off-web prices).
 
-**Wedge vertical: rental screening.** The first configured use case is calling apartment
-leasing offices to run a standardized screening interview and build a comparison across
-properties. It is a *demo of the general pattern*, not the product. The engine is
-vertical-agnostic; rental is config, not hardcode.
+**v1 test vertical:** auto repair (bounded calls, predictable follow-ups, shops quote by
+phone). The product is **not committed to it** — the engine is generic.
 
-### Architectural implication of the thesis (read this twice)
+### The moat is NOT the pipeline
 
-The core engine must be **use-case-agnostic**. A vertical (rental, subscription
-cancellation, bill dispute, appointment booking) is defined by a **config bundle**, never
-by branching logic inside the engine. If adding a new vertical requires editing the
-dialogue loop or the extractor, the abstraction has failed. The codebase itself is the
-argument that this is a platform, not a rental app.
+Four things are the moat, and they are where engineering effort goes:
+1. **The pre-call brief** (front-loading context so calls don't fail mid-conversation).
+2. **The hard-rule agent behavior** (never fabricate a user fact).
+3. **The proof/report layer** (transcript-backed, trustable results).
+4. **The cache** (per-business answer store — bends cost from linear to sublinear).
 
----
-
-## Two failure modes that drive every decision
-
-Do not regress on either — these come from real interview-loop feedback and are the
-whole point of the project:
-
-1. **Structured ambiguity handling.** When the other party gives a vague, partial, or
-   contradictory answer ("rent's around 2k-ish, depends"), the system represents that
-   ambiguity *as data* — it never silently coerces it into a clean value. Every extracted
-   field carries a confidence score and a `needs_human_review` flag.
-2. **Prompt robustness.** The agent handles interruptions, non-answers, rushed/hostile
-   humans, IVR phone trees, and off-script tangents without derailing. Prompts are tested
-   against adversarial and degenerate inputs, not just the happy path.
-
-If a change makes extraction look more "confident" by hiding uncertainty, that is a
-**regression**, not an improvement.
+STT / TTS / latency / turn-taking are **bought, not built** (see Stack). Do not spend
+timeline there — it is undifferentiated infrastructure.
 
 ---
 
-## Tech Stack
+## Stack (build-vs-buy — READ THIS before proposing architecture)
 
-| Layer               | Choice                          | Notes |
-|---------------------|---------------------------------|-------|
-| Voice orchestration | **Pipecat** (Python)            | Own the STT→LLM→TTS pipeline + turn-taking. Do NOT outsource to Vapi/Retell — those are the *business-side* tools this project is a counterpoint to. |
-| Telephony          | **Twilio** (Programmable Voice)  | Outbound calls + IVR/phone-tree navigation (DTMF). |
-| STT                | **Deepgram** (streaming)         | Low-latency partials. Known quantity. |
-| TTS                | **Cartesia** or **ElevenLabs**   | Pick one, keep swappable behind an interface. |
-| LLM (dialogue)     | OpenAI `gpt-4o` / Anthropic      | Conversation policy + follow-up decisions. |
-| LLM (extraction)   | Structured-output mode           | Separate call from dialogue. Pydantic-typed. |
-| Backend / API      | **FastAPI** + async              | Call orchestration, job queue, results API. |
-| Data models        | **Pydantic v2**                  | Single source of truth for schemas + vertical configs. |
-| Persistence        | **Postgres** (SQLAlchemy async)  | Transcripts, extractions, runs. |
-| Queue              | **Redis + arq**                  | Calls are long-running; never block the API. |
-| Dashboard          | **Next.js (App Router) + TS**    | Results + per-call drill-down. Depth matters (see below). |
-| Deploy             | Railway or Fly.io                | One-command deployable. |
+**Do NOT build the voice pipeline.** Build on a voice-infra platform that provides
+telephony + STT + LLM + TTS + turn-taking as one product.
 
-**Alternative voice framework:** LiveKit Agents. Only swap if Pipecat's telephony/IVR
-path proves painful. Flag the tradeoff before switching.
+| Layer            | Choice | Notes |
+|------------------|--------|-------|
+| Voice infra      | **Bland / Retell / Vapi** — evaluate on latency, IVR navigation, per-minute cost | All support parallel calls + transcripts. Prefer BYO-component (Vapi-style) for stack-routing control (see Cost). |
+| Telephony        | Provided by platform (Twilio underneath) | BYO SIP trunk is a volume-era optimization, not v1. |
+| Pre-call brief   | One LLM call (OpenAI/Anthropic) | The highest-leverage step in the product. |
+| Job orchestration| Queue + worker (Redis + arq / Celery) | Fan out calls under a concurrency cap, collect results. |
+| App front        | **Next.js / React** | Web only. No mobile in v1. |
+| Backend          | **FastAPI** + async | Thin — orchestrate jobs, serve results. |
+| Data models      | **Pydantic v2** | Source of truth for the request object + extraction shapes. |
+| Storage          | Postgres | Transcripts, terminal states, request objects, keyed answer cache. **No sensitive PII by design.** |
+| Notifications    | SMS (Twilio) or email | Async completion ping. |
+| Deploy           | Railway / Fly.io | One-command deployable. |
 
----
-
-## Architecture
-
-```
-User picks a VERTICAL + provides targets ──▶ Job (N targets)
-                                                   │
-                                                   ▼
-                                        [ Call Orchestrator ]  ── async, one call per target
-                                                   │
-                          ┌────────────────────────┴────────────────────────┐
-                          ▼                                                  ▼
-                 [ Pipecat pipeline ]                              [ Transcript store ]
-        IVR nav → STT → Dialogue LLM → TTS                                  │
-                          │                                                  │
-                          ▼                                                  ▼
-                 [ Turn-by-turn events ] ──────────────────▶ [ Extraction Pipeline ]
-                                                              per-field, confidence-gated
-                                                                       │
-                                                                       ▼
-                                                              [ Results Builder ]
-                                                              (comparison / single result)
-                                                                       │
-                                                                       ▼
-                                                  Dashboard (results + drill-down + review queue)
-```
-
-**Engine vs. vertical is the load-bearing boundary.** `engine/` knows nothing about
-apartments. `verticals/rental/` supplies the goal, the question set, the extraction
-schema, and the disclosure script. Same engine will later run `verticals/cancel_subscription/`.
+> This reverses an earlier "own the pipeline" stance. Intentional: solo founder proving
+> an engine. Owning the pipeline is a post-PMF decision, not a v1 one.
 
 ---
 
-## The Vertical abstraction (the core design bet)
+## The Three-Part Input (the completion-rate driver)
 
-A vertical is a config bundle, defined once, consumed by the generic engine:
+Completion rate lives or dies on the fact that **businesses ask questions back**. The
+input is never just "the question":
+
+1. **The ask** — plain language ("quote to replace front brake pads").
+2. **The context bundle** — facts for likely follow-ups (year/make/model, mileage, symptom).
+3. **The targets** — the phone numbers (user-supplied in v1; auto-discovery is v2).
+
+### Request object (generic — NO vertical hardcoded)
 
 ```python
-class Vertical(BaseModel):
-    id: str                              # "rental"
-    goal: str                            # natural-language objective for the dialogue agent
-    disclosure_script: str               # legally-required "this is an AI calling on behalf of..." line
-    question_set: list[Question]         # what to find out
-    extraction_schema: type[BaseModel]   # generated from question_set — typed output shape
-    result_mode: Literal["compare", "single"]  # comparison across targets vs. one outcome
+{
+  "ask": "quote for front brake pad replacement",
+  "return_fields": ["price", "parts_vs_labor", "earliest_availability"],
+  "context": {"car": "2018 Honda Civic", "mileage": 82000, "symptom": "squealing"},
+  "boundaries": {"read_only": True, "do_not_share": ["full_name"]},
+  "targets": ["+1XXXXXXXXXX", "+1XXXXXXXXXX", "+1XXXXXXXXXX"]
+}
 ```
 
-Rules:
-- The engine reads `Vertical` and runs. It contains **zero** `if vertical == "rental"` branches.
-- The `extraction_schema` is generated *from* `question_set`, so adding a question doesn't
-  require hand-editing the extractor.
-- New vertical = new folder under `verticals/` + a config. No engine changes. If you find
-  yourself editing `engine/`, stop and reconsider the abstraction.
+The agent handles follow-ups **dynamically** — the LLM reasons from the context bundle in
+real time, governed by the hard rule below. No vertical logic in code. Per-vertical "hint
+packs" (auto → ask year/make/model/mileage) are a **data-driven bolt-on** to enrich the
+brief's completeness check — never a code branch.
 
 ---
 
-## Core Design Principles
+## Pre-Call Brief (P0 — highest-leverage feature)
 
-### 1. Confidence-gated extraction (non-negotiable)
-
-Every extracted field follows this shape:
-
-```python
-class ExtractedField[T](BaseModel):
-    value: T | None
-    confidence: float                    # 0.0–1.0
-    source_span: str | None              # verbatim transcript quote backing the value
-    needs_human_review: bool
-    reason: str | None                   # why review is needed, if flagged
-```
-
-- `confidence < THRESHOLD` (default 0.7) ⇒ `needs_human_review = True`; the value is
-  surfaced *with a warning*, never silently dropped or silently trusted.
-- No value without a `source_span`. If the agent can't point to where in the transcript
-  the answer came from, it's a hallucination — set `value = None`.
-- Contradictions within a call must produce a flagged field, not a coin-flip pick.
-
-### 2. Structured ambiguity handling
-
-The dialogue policy distinguishes:
-- **Clear answer** → extract normally.
-- **Ambiguous answer** → agent asks *one* targeted clarifying follow-up, then moves on.
-- **Refused / unknown** → record `value=None, reason="declined"`, move on.
-
-Never fabricate a plausible value to fill a gap. "Unknown" is a first-class outcome.
-
-### 3. Prompt robustness
-
-- All dialogue + extraction prompts live in `prompts/` as versioned files. Never inline.
-- Every prompt ships with an adversarial test set: interruptions, silence, rushed/hostile
-  reps, IVR phone trees, contradictory info, off-topic tangents, refusal to answer.
-- Extraction prompts tested against degenerate transcripts (empty, single-word,
-  wall-of-text, non-English fragments).
-
-### 4. Act on the user's behalf, transparently
-
-- The agent always opens with the vertical's `disclosure_script`: it identifies as an AI
-  calling on behalf of a named person. No pretending to be human.
-- The agent gathers information and reports back. It does **not** commit the user to
-  anything (signing, paying, agreeing to terms) without an explicit human-in-the-loop
-  approval step. Getting info is autonomous; making commitments is not.
+On submit, one LLM call pre-processes the ask into: the **primary question**, the
+**return fields**, the **likely follow-ups**, and a **missing-context check** surfaced to
+the user *before dialing* ("Shops will likely ask year, make, model, mileage — add these").
+This is the difference between ~40% and ~80% completion. Build it first.
 
 ---
 
-## Dashboard Requirements (do not ship a toy)
+## Call State Machine (each call = independent run; log terminal state for all)
 
-First-class deliverable. Prior projects were dinged for shallow dashboards — do not repeat.
+```
+CACHE_CHECK  (before spending a single minute)
+  └─ fresh cached answer for (business, question) within TTL? → terminal: GOT_INFO (cached, $0)
+     else → DIAL
 
-- **Results view** (comparison matrix for `compare` verticals; outcome card for `single`),
-  with confidence indicated visually (muted/warning styling on low-confidence cells).
-- **Drill-down**: click any value → see the `source_span` quote + surrounding transcript.
-- **Review queue**: every `needs_human_review` field across all calls, filterable.
-- **Call health**: per-call metrics (duration, turns, interruptions, IVR hops, % fields
-  extracted, % flagged).
+DIAL
+  └─ CLASSIFY_ANSWER ── human ───→ CONVERSE
+                     ── IVR ─────→ NAVIGATE_MENU → (hold | human | callback option)
+                     ── hold ────→ WAIT_ON_HOLD → (human returns) | REQUEST_CALLBACK
+                     ── vm/no-answer/busy → terminal: COULDNT_REACH  (leave NO message)
 
-If a reviewer can't trace a value back to the exact words spoken, the dashboard is incomplete.
+REQUEST_CALLBACK (cost-saver):
+  IVR offers "press N, we'll call you back" → take it, hang up (STOP THE METER),
+  await inbound callback → on callback → CONVERSE
+
+CONVERSE:
+  disclose (AI assistant calling for a customer)
+  → ask primary question → handle follow-ups (hard rule) → extract return_fields
+  → close politely → terminal: GOT_INFO (full | partial)
+
+Blocked (won't quote by phone / hard-gated on a missing fact):
+  → close politely, log reason → terminal: REFUSED
+```
+
+Terminal states are first-class results, not errors. `COULDNT_REACH` and `REFUSED`
+appear clearly in the UI as outcomes, never as crashes.
+
+---
+
+## The Hard Rule (P0 — non-negotiable, has a negative test)
+
+When a business asks for a fact **not in the context bundle**, the agent states it doesn't
+have it / marks the field unknown. **It never fabricates a user fact.**
+
+Negative test that must pass: no invented car year, name, mileage, or account detail
+appears in *any* transcript. This is the trust foundation of the whole product — a
+fabricated fact on a real call to a real business is the worst failure mode.
+
+Corollary for extraction: every returned value is backed by the transcript. If the agent
+can't ground a `return_field` in what was actually said, it returns unknown, not a guess.
+(Per-field confidence scoring — flagging soft vs. firm quotes — is a P1 enhancement, not
+a v1 blocker; the no-fabrication grounding is P0.)
+
+---
+
+## Cache + Cost Architecture (the structural win)
+
+Cost is **per-call-minute** — linear by default, not zero-marginal SaaS. Two levers bend
+it, both designed into v1 even though the cache starts cold:
+
+1. **Callback elimination** (biggest per-job cut, >50%). Detect "press N for a callback,"
+   take it, hang up to stop the meter, resume on inbound callback. (Full inbound routing
+   is P1; design the state machine for it now.)
+2. **Caching** (the moat). Store answers keyed by `(business, normalized_question)` with a
+   **per-field TTL** (a price expires faster than "do you service Hondas"). 50 users want a
+   brake quote in one metro → ~1 call, not 50. `CACHE_CHECK` + the keyed store are **P0
+   plumbing** so the benefit compounds instead of being a retrofit.
+
+Supporting levers: cheap model/TTS during hold (only need "human back yet?" detection);
+route the stack by task (mechanical bulk = cheap model, reasoning moments = expensive);
+per-job minute budget + hold-abandon threshold + concurrency cap to cap downside.
+
+**Freshness is mandatory.** A stale quote is worse than no quote. Serve within TTL,
+re-verify with a live call past it — never serve stale.
+
+---
+
+## Priorities
+
+**P0 (build in v1):** three-part input + request object · pre-call brief · call state
+machine with terminal-state logging · the hard rule · transcript capture per call ·
+ranked results table + per-call transcript cards · async completion notification ·
+CACHE_CHECK + keyed answer store (even if cold) · concurrency cap.
+
+**P1 (fast follow):** callback elimination (needs inbound routing) · cheap-stack-during-hold
++ abandon threshold · per-vertical hint packs · live in-progress status chips · "retry the
+ones that didn't answer" · caveat/confidence extraction.
+
+**P2 (design so these stay easy, don't build):** number auto-discovery (v2 — keep `targets`
+a plain input; engine never assumes its origin) · booking/transacting tier (+ verification)
+· real-time "patch me in" handoff · SMS-native interface.
+
+---
+
+## Non-Goals (explicit — do NOT build in v1)
+
+- No transacting (no booking/canceling/negotiating/committing the user). Read-only info only.
+- No identity-verification flow (v1 targets prospective-customer questions that don't need it).
+- No sensitive-data storage (no SSN/DOB/account/payment). Keeps v1 from also being a security project.
+- No mid-call user interruption (blocked → close + report; the whole flow stays async).
+- No number discovery (user supplies numbers).
+- No billing (free prototype; monetize after completion rate is proven).
+- No mobile app (web only).
+
+---
+
+## Success Metric
+
+**≥70% of reachable businesses return usable info.** Every design tradeoff serves this
+number and the trust that backs it (transcripts).
 
 ---
 
 ## Working Conventions
 
-- **Plan first.** For any non-trivial change, write the plan (files, approach, tests)
-  before editing. Confirm before large refactors or before touching `engine/`.
-- **Incremental build-and-test.** Small verifiable steps; every new field/prompt ships
-  with a test. Never batch a week of work into one commit.
-- **Async everywhere** on the backend. Calls are long-running I/O — nothing blocks the loop.
-- **Type everything.** Pydantic v2 + full hints. `mypy` clean.
-- **Prompts are code.** Versioned, reviewed, tested. Never inline.
-- **Secrets** via env only. Never commit keys.
-- **Recorded calls / PII**: transcripts contain real people's voices and words. Store
-  minimally, document retention, gate recording behind consent handling.
+- **Plan first.** Non-trivial change → write the plan (files, approach, tests) before editing.
+- **Keep the engine generic.** No vertical `if` branches in orchestration/agent code.
+  Vertical specifics live in data (hint packs), never logic.
+- **Incremental build-and-test.** Small verifiable steps; new behavior ships with a test.
+- **Async everywhere** on the backend. Calls are long-running I/O — never block the loop.
+- **Type everything.** Pydantic v2 + full hints; `mypy` clean.
+- **Prompts are code** — versioned files in `prompts/`, never inline. Each ships with an
+  adversarial test set (interruptions, silence, rushed reps, IVR trees, contradictions, refusals).
+- **Secrets** via env only. **No sensitive PII stored, by design** — enforce at the model level.
 
 ---
 
-## Commands
+## Acceptance Criteria (must pass)
 
-```bash
-# Setup
-uv venv && source .venv/bin/activate
-uv pip install -r requirements.txt
-
-# Run backend API
-uvicorn app.main:app --reload
-
-# Run the voice agent worker (Pipecat pipeline)
-python -m app.agent.worker
-
-# Run a job locally (dev, mock telephony)
-python -m app.cli run --vertical rental --targets examples/rental_targets.json
-
-# Tests
-pytest                          # unit + extraction tests
-pytest tests/prompts -v         # adversarial prompt suite
-pytest -m integration           # end-to-end with mocked STT/TTS
-
-# Dashboard
-cd dashboard && npm run dev
-
-# Type + lint
-mypy app/ && ruff check app/
-```
+- Valid request, 1+ reachable targets → each call returns a terminal state; job shows a
+  ranked table + a transcript per call.
+- Human answers → agent discloses it's an AI assistant, asks, extracts return fields.
+- Ask missing needed context → user is prompted for missing fields **before** any call.
+- Business asks for a fact not in context → agent marks unknown, never fabricates
+  (negative test: no invented facts in any transcript).
+- vm/no-answer/busy → `COULDNT_REACH`, no message left, job continues.
+- Refusal to quote by phone → `REFUSED` with reason, shown as an outcome not an error.
+- User closes the tab → still gets a completion notification.
+- N > cap targets → no more than cap calls run concurrently.
+- Fresh cached answer within TTL → served with no call placed.
+- Cached answer past TTL → re-verified with a call, not served stale.
+- (P1) IVR offers callback → outbound ends (meter stops), job resumes on inbound callback.
 
 ---
 
 ## What NOT to do
 
-- Do **not** put vertical-specific logic (`if vertical == "rental"`) inside `engine/`.
-  That branch is the failure of the whole thesis.
-- Do **not** replace the confidence/`source_span` machinery to "simplify." That machinery
-  *is* the project.
-- Do **not** coerce ambiguous or missing values into clean defaults.
-- Do **not** move to a no-code voice platform (Vapi/Retell) — owning the pipeline is the point.
-- Do **not** let the agent make binding commitments without human approval.
-- Do **not** inline prompts or skip the adversarial test set when adding a field.
-
----
-
-## Open questions to resolve early
-
-- **Consent/recording law.** Outbound calls vary by state (WA is two-party consent).
-  Finalize the `disclosure_script` per vertical before any real calls.
-- **Chat-first fallback.** Some businesses prefer web chat/email. A text channel that
-  reuses the same extraction pipeline de-risks the demo (not blocked on live-call plumbing)
-  and doubles as a second proof the engine is channel-agnostic, not just vertical-agnostic.
-- **Wedge choice.** Rental is a great *visual* demo but low-frequency. Higher-frequency /
-  higher-emotion verticals (cancel/negotiate a subscription, dispute a bill) may show the
-  thesis better. Keep rental as the demo; design the config layer so these are trivial to add.
+- Do **not** build STT/TTS/turn-taking from scratch. Buy the pipeline.
+- Do **not** put vertical logic in code. Hint packs are data.
+- Do **not** let the agent fabricate a user fact or serve an ungrounded return value.
+- Do **not** transact or commit the user to anything in v1.
+- Do **not** store sensitive PII.
+- Do **not** serve a cached answer past its TTL.
+- Do **not** leave voicemails on COULDNT_REACH.
+- Do **not** ping the user mid-call.

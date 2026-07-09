@@ -1,0 +1,14 @@
+{
+  "ask": "quote for front brake pad replacement",
+  "return_fields": ["price", "parts_vs_labor", "earliest_availability"],
+  "context": {"car": "2018 Honda Civic", "mileage": 82000},
+  "boundaries": {"read_only": true, "do_not_share": ["full_name"]},
+  "targets": [
+    "+15550000001",
+    "+15550000002",
+    "+15550000003",
+    "+15550000004",
+    "+15550000005",
+    "+15550000006"
+  ]
+}

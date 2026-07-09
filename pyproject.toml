@@ -13,9 +13,6 @@ dependencies = [
     "alembic>=1.13",
     "arq>=0.26",
     "redis>=5.0",
-    "pipecat-ai>=0.0.40",
-    "twilio>=9.0",
-    "deepgram-sdk>=3.0",
     "openai>=1.30",
     "anthropic>=0.30",
     "httpx>=0.27",
@@ -29,12 +26,13 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
     "fakeredis>=2.23",
+    "aiosqlite>=0.20",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: end-to-end tests with mocked STT/TTS/telephony (opt-in)",
+    "integration: end-to-end tests against a real LLM provider (opt-in)",
 ]
 addopts = "-m 'not integration'"
 asyncio_mode = "auto"
@@ -51,8 +49,13 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends(...)-as-default-argument is the framework's idiomatic
+# DI pattern, not the mutable-default-argument footgun B008 targets.
+"app/api/**" = ["B008"]
+
 [tool.hatch.build.targets.wheel]
-packages = ["app", "engine", "verticals"]
+packages = ["app", "engine"]
 
 [build-system]
 requires = ["hatchling"]

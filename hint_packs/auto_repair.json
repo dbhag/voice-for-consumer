@@ -1,0 +1,7 @@
+{
+  "likely_follow_up_fields": [
+    {"key": "car", "prompt": "Shops will likely ask for your car's year, make, and model — add this?"},
+    {"key": "mileage", "prompt": "Shops will likely ask for your mileage — add this?"},
+    {"key": "symptom", "prompt": "Shops will likely ask what symptom you're noticing — add this?"}
+  ]
+}

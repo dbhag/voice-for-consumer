@@ -1,5 +1,9 @@
-"""Async engine/sessionmaker factory. Importable only in this pass — not
-called by `app.cli run`, no live Postgres connection required.
+"""Async engine/sessionmaker factory backing `app/db/repository.py`.
+
+Production uses `settings.database_url` (Postgres, per CLAUDE.md's Stack
+table). Tests/local dev pass an explicit SQLite URL instead — see
+`tests/db/test_repository.py` for the in-memory StaticPool setup a single
+shared async SQLite connection needs.
 """
 
 from __future__ import annotations
@@ -14,8 +18,8 @@ from sqlalchemy.ext.asyncio import (
 from app.config import settings
 
 
-def make_engine() -> AsyncEngine:
-    return create_async_engine(settings.database_url)
+def make_engine(database_url: str | None = None, **engine_kwargs: object) -> AsyncEngine:
+    return create_async_engine(database_url or settings.database_url, **engine_kwargs)
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

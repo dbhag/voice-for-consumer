@@ -1,20 +1,22 @@
+from __future__ import annotations
+
 import asyncio
 import json
 
 import click
-from pydantic import TypeAdapter
 
 from app.config import settings
-from engine.models import Target
+from engine.cache import InMemoryCacheStore
+from engine.hint_packs import load_hint_pack
+from engine.models import Request
 from engine.orchestrator import run_job
 from engine.providers.base import ProviderBundle
 from engine.providers.mock import (
-    MockDialogueLLMProvider,
     MockExtractionProvider,
-    MockTelephonyProvider,
+    MockPreCallBriefProvider,
+    MockVoicePlatformProvider,
 )
-from engine.results import build_results
-from verticals.registry import get_vertical
+from engine.results import rank_results
 
 
 @click.group()
@@ -23,27 +25,51 @@ def cli() -> None:
 
 
 @cli.command("run")
-@click.option("--vertical", "vertical_id", required=True, help="Vertical id, e.g. 'rental'.")
 @click.option(
-    "--targets", required=True, type=click.Path(exists=True), help="Path to targets JSON."
+    "--request",
+    "request_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to a Request JSON file.",
 )
-def run(vertical_id: str, targets: str) -> None:
-    """Run a job locally against mock telephony/dialogue/extraction providers."""
-    vertical = get_vertical(vertical_id)
+@click.option(
+    "--hint-pack", "hint_pack_name", default=None, help="Hint pack id, e.g. 'auto_repair'."
+)
+def run(request_path: str, hint_pack_name: str | None) -> None:
+    """Run a job locally against mock voice-platform/extraction providers."""
+    with open(request_path, encoding="utf-8") as f:
+        request = Request.model_validate_json(f.read())
 
-    with open(targets, encoding="utf-8") as f:
-        raw_targets = json.load(f)
-    target_list = TypeAdapter(list[Target]).validate_python(raw_targets)
+    hint_pack = load_hint_pack(hint_pack_name) if hint_pack_name else None
 
     providers = ProviderBundle(
-        telephony=MockTelephonyProvider(),
-        dialogue=MockDialogueLLMProvider(),
-        extraction=MockExtractionProvider(threshold=settings.confidence_threshold),
+        voice_platform=MockVoicePlatformProvider(),
+        pre_call_brief=MockPreCallBriefProvider(),
+        extraction=MockExtractionProvider(),
     )
 
-    results = asyncio.run(run_job(vertical, target_list, providers))
-    output = build_results(vertical, results)
-    click.echo(output.model_dump_json(indent=2))
+    brief = asyncio.run(providers.pre_call_brief.build_brief(request, hint_pack))
+    for missing in brief.missing_context:
+        click.echo(f"[missing context] {missing.prompt}", err=True)
+
+    cache = InMemoryCacheStore()
+    job_result = asyncio.run(
+        run_job(
+            request,
+            providers,
+            cache,
+            settings.concurrency_cap,
+            settings.job_minute_budget,
+            settings.hold_abandon_seconds,
+        )
+    )
+    ranked = rank_results(job_result.results)
+
+    output = {
+        "request": job_result.request.model_dump(mode="json"),
+        "results": [r.model_dump(mode="json") for r in ranked],
+    }
+    click.echo(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
