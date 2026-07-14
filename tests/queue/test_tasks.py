@@ -79,6 +79,7 @@ async def test_enqueued_job_runs_persists_and_notifies(
         "run_job_task",
         "job-1",
         sample_request.model_dump(mode="json"),
+        None,
         "user@example.com",
         _job_id="arq-job-1",
     )

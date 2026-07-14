@@ -2,6 +2,22 @@ from __future__ import annotations
 
 import os
 
+# Must run before any import below (transitively `app.config`) constructs the
+# `Settings()` singleton. pydantic-settings' precedence is init kwargs > env
+# vars > .env file, so setting these here — before that singleton exists —
+# makes tests that expect mock/fake defaults immune to whatever a
+# developer's real local `.env` says (VOICE_PLATFORM_PROVIDER=retell + a
+# real API key, in this repo's `.env`). Without this, "defaults to mock"
+# tests silently built real provider objects and placed real HTTP requests
+# against api.retellai.com.
+os.environ.setdefault("VOICE_PLATFORM_PROVIDER", "mock")
+os.environ.setdefault("LLM_PROVIDER", "fake")
+os.environ.setdefault("OPENAI_API_KEY", "")
+os.environ.setdefault("ANTHROPIC_API_KEY", "")
+os.environ.setdefault("VOICE_PLATFORM_API_KEY", "")
+os.environ.setdefault("RETELL_AGENT_ID", "")
+os.environ.setdefault("RETELL_FROM_NUMBER", "")
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import StaticPool

@@ -26,7 +26,9 @@ class JobRow(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="queued")
     hint_pack_name: Mapped[str | None] = mapped_column(String, nullable=True)
     notify_email: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
     call_results: Mapped[list[CallResultRow]] = relationship(back_populates="job")
 
@@ -45,7 +47,7 @@ class CallResultRow(Base):
     transcript: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     from_cache: Mapped[bool] = mapped_column(nullable=False, default=False)
     call_minutes: Mapped[float] = mapped_column(nullable=False, default=0.0)
-    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     job: Mapped[JobRow] = relationship(back_populates="call_results")

@@ -10,12 +10,13 @@ class Settings(BaseSettings):
 
     # The ONE bought voice-infra platform (telephony + STT + TTS + turn-taking
     # as a single product) behind engine.providers.base.VoicePlatformProvider.
-    # Vendor choice (Bland / Retell / Vapi) is a pending TODO — evaluate on
-    # latency / IVR-navigation / per-minute cost per CLAUDE.md's Stack table.
-    # "mock" backs engine.providers.mock.MockVoicePlatformProvider.
+    # "mock" backs engine.providers.mock.MockVoicePlatformProvider; "retell"
+    # backs engine.providers.retell.RetellVoicePlatformProvider.
     voice_platform_provider: str = "mock"
     voice_platform_api_key: str | None = None
     voice_platform_base_url: str | None = None
+    retell_agent_id: str | None = None
+    retell_from_number: str | None = None
 
     concurrency_cap: int = 5
     # Placeholders — not calibrated against real per-minute vendor pricing or

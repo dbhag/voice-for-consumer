@@ -13,6 +13,11 @@ build/
 dashboard/node_modules/
 dashboard/.next/
 dashboard/out/
+node_modules/
 
 # db
 *.sqlite3
+*.db
+
+# dev.sh runtime logs
+.dev-logs/

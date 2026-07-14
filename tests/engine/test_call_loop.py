@@ -72,7 +72,7 @@ class ScriptedVoicePlatform:
         self.session = session
         self.started = False
 
-    async def start_call(self, phone_number: str) -> ScriptedSession:
+    async def start_call(self, request: Request, phone_number: str) -> ScriptedSession:
         self.started = True
         return self.session
 

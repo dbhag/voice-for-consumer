@@ -3,5 +3,10 @@
     {"key": "car", "prompt": "Shops will likely ask for your car's year, make, and model — add this?"},
     {"key": "mileage", "prompt": "Shops will likely ask for your mileage — add this?"},
     {"key": "symptom", "prompt": "Shops will likely ask what symptom you're noticing — add this?"}
-  ]
+  ],
+  "field_labels": {
+    "price": "the price",
+    "parts_vs_labor": "whether the cost is mostly parts or mostly labor",
+    "earliest_availability": "the earliest available appointment"
+  }
 }

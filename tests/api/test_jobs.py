@@ -6,7 +6,6 @@ import fakeredis.aioredis as fakeaioredis
 import pytest
 from arq.connections import ArqRedis
 from arq.worker import Worker
-from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from app.api.deps import get_arq_pool, get_session
@@ -41,7 +40,15 @@ async def fake_arq_pool():
 
 
 @pytest.fixture
-def client(sqlite_session_factory, fake_arq_pool: ArqRedis, monkeypatch: pytest.MonkeyPatch):
+async def client(sqlite_session_factory, fake_arq_pool: ArqRedis):
+    # httpx.AsyncClient over ASGITransport, not the sync TestClient: the sync
+    # TestClient runs requests through its own anyio portal loop, separate
+    # from this test coroutine's event loop. That's harmless for
+    # aiosqlite (not loop-bound the same way), but a real asyncpg
+    # connection — loop-bound at the C level — raises "attached to a
+    # different loop" the moment a request handler tries to use it. Driving
+    # everything from one AsyncClient keeps engine and requests on one loop
+    # regardless of which DB backend TEST_DATABASE_URL points at.
     async def override_get_session():
         async with sqlite_session_factory() as session:
             yield session
@@ -51,11 +58,13 @@ def client(sqlite_session_factory, fake_arq_pool: ArqRedis, monkeypatch: pytest.
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_arq_pool] = override_get_arq_pool
-    # No `with TestClient(app) as c:` — that would run app/main.py's lifespan,
-    # which opens a real Redis connection. Dependency overrides above make
-    # that state unnecessary for these tests.
-    test_client = TestClient(app)
-    yield test_client
+    # No lifespan (`async with AsyncClient(...) as c:` alone doesn't run
+    # app/main.py's lifespan either) — that would open a real Redis
+    # connection. Dependency overrides above make that state unnecessary.
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as test_client:
+        yield test_client
     app.dependency_overrides.clear()
 
 
@@ -98,8 +107,10 @@ def _auto_repair_request(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def test_missing_context_is_surfaced_before_any_job_is_created(client: TestClient) -> None:
-    response = client.post(
+async def test_missing_context_is_surfaced_before_any_job_is_created(
+    client: AsyncClient,
+) -> None:
+    response = await client.post(
         "/jobs",
         json={
             "request": _auto_repair_request(context={}),
@@ -112,7 +123,7 @@ def test_missing_context_is_surfaced_before_any_job_is_created(client: TestClien
     assert body["status"] == "needs_context"
     assert len(body["brief"]["missing_context"]) > 0
 
-    assert client.get("/jobs").json() == []
+    assert (await client.get("/jobs")).json() == []
 
 
 async def test_full_job_lifecycle_submit_drain_and_read_back(
@@ -169,6 +180,6 @@ async def test_full_job_lifecycle_submit_drain_and_read_back(
         app.dependency_overrides.clear()
 
 
-def test_unknown_job_id_is_404(client: TestClient) -> None:
-    response = client.get("/jobs/does-not-exist")
+async def test_unknown_job_id_is_404(client: AsyncClient) -> None:
+    response = await client.get("/jobs/does-not-exist")
     assert response.status_code == 404

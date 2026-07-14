@@ -101,6 +101,10 @@ class ConverseOutcome(BaseModel):
     transcript: list[TranscriptTurn]
     refused: bool = False
     refusal_reason: str | None = None
+    # Real per-call cost, when the voice platform reports one (e.g. Retell's
+    # call_analysis.call_cost). None — not 0.0 — when the platform has no
+    # cost signal; never a fabricated estimate.
+    cost_usd: float | None = None
 
 
 class CallResult(BaseModel):
@@ -113,6 +117,14 @@ class CallResult(BaseModel):
     transcript: list[TranscriptTurn] = Field(default_factory=list)
     from_cache: bool = False
     call_minutes: float = 0.0
+    # Wall-clock time spent in WAIT_ON_HOLD. None when the call never reached
+    # hold — which, for the Retell adapter, is always (classify() never
+    # surfaces HOLD; see engine/providers/retell.py's module docstring).
+    hold_seconds: float | None = None
+    # See ConverseOutcome.cost_usd — passed through unchanged from whatever
+    # converse() reported; None (not 0.0) when no calls reached CONVERSE
+    # (e.g. COULDNT_REACH) or the platform has no cost signal.
+    cost_usd: float | None = None
     started_at: datetime
     ended_at: datetime | None = None
 

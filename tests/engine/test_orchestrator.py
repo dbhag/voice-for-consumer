@@ -54,7 +54,7 @@ class ConcurrentVoicePlatform:
         self.active = 0
         self.max_active = 0
 
-    async def start_call(self, phone_number: str) -> _SleepySession:
+    async def start_call(self, request: Request, phone_number: str) -> _SleepySession:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         return _SleepySession(self)
@@ -133,7 +133,7 @@ class _BudgetPlatform:
     def __init__(self) -> None:
         self.start_call_count = 0
 
-    async def start_call(self, phone_number: str) -> _BudgetSession:
+    async def start_call(self, request: Request, phone_number: str) -> _BudgetSession:
         self.start_call_count += 1
         return _BudgetSession(self)
 

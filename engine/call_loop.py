@@ -9,6 +9,7 @@ handling is delegated entirely to the bought voice platform's `converse()`.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime
 
 from engine.cache import CacheStore, normalize_question, ttl_for_field
@@ -68,6 +69,7 @@ async def _converse(
     extraction: ExtractionProvider,
     cache: CacheStore,
     started_at: datetime,
+    hold_seconds: float | None = None,
 ) -> CallResult:
     outcome = await session.converse(DISCLOSURE, request.ask, request.context)
     await session.hangup()
@@ -81,6 +83,8 @@ async def _converse(
             refusal_reason=outcome.refusal_reason,
             transcript=outcome.transcript,
             call_minutes=call_minutes,
+            hold_seconds=hold_seconds,
+            cost_usd=outcome.cost_usd,
             started_at=started_at,
             ended_at=ended_at,
         )
@@ -99,29 +103,39 @@ async def _converse(
         fields=fields,
         transcript=outcome.transcript,
         call_minutes=call_minutes,
+        hold_seconds=hold_seconds,
+        cost_usd=outcome.cost_usd,
         started_at=started_at,
         ended_at=ended_at,
     )
 
 
-async def _wait_on_hold(session: VoiceCallSession, hold_abandon_seconds: float) -> HoldOutcome:
+async def _wait_on_hold(
+    session: VoiceCallSession, hold_abandon_seconds: float
+) -> tuple[HoldOutcome, float]:
     """Engine-side hold-abandon threshold: a hard cutoff independent of
     whatever the bought voice platform itself does. A platform that never
-    returns from hold cannot hang a call past this budget.
+    returns from hold cannot hang a call past this budget. Also times the
+    wait itself — see CallResult.hold_seconds.
     """
+    started = time.monotonic()
     try:
-        return await asyncio.wait_for(session.wait_on_hold(), timeout=hold_abandon_seconds)
+        outcome = await asyncio.wait_for(session.wait_on_hold(), timeout=hold_abandon_seconds)
     except TimeoutError:
-        return HoldOutcome.ABANDONED
+        outcome = HoldOutcome.ABANDONED
+    return outcome, time.monotonic() - started
 
 
-def _reach_failure(target: str, reason: ReachFailure, started_at: datetime) -> CallResult:
+def _reach_failure(
+    target: str, reason: ReachFailure, started_at: datetime, hold_seconds: float | None = None
+) -> CallResult:
     ended_at = datetime.now(UTC)
     return CallResult(
         target=target,
         terminal_state=TerminalState.COULDNT_REACH,
         reach_failure=reason,
         call_minutes=_call_minutes(started_at, ended_at),
+        hold_seconds=hold_seconds,
         started_at=started_at,
         ended_at=ended_at,
     )
@@ -141,7 +155,7 @@ async def run_call(
     if cached is not None:
         return cached
 
-    session = await voice_platform.start_call(target)
+    session = await voice_platform.start_call(request, target)
     classification = await session.classify()
 
     if classification is ClassifyAnswer.VM_NO_ANSWER_BUSY:
@@ -149,20 +163,28 @@ async def run_call(
         return _reach_failure(target, ReachFailure.NO_ANSWER, started_at)
 
     if classification is ClassifyAnswer.HOLD:
-        hold_outcome = await _wait_on_hold(session, hold_abandon_seconds)
+        hold_outcome, hold_seconds = await _wait_on_hold(session, hold_abandon_seconds)
         if hold_outcome is HoldOutcome.ABANDONED:
-            return _reach_failure(target, ReachFailure.HOLD_ABANDONED, started_at)
-        return await _converse(request, target, session, extraction, cache, started_at)
+            return _reach_failure(
+                target, ReachFailure.HOLD_ABANDONED, started_at, hold_seconds=hold_seconds
+            )
+        return await _converse(
+            request, target, session, extraction, cache, started_at, hold_seconds=hold_seconds
+        )
 
     if classification is ClassifyAnswer.IVR:
         menu_outcome = await session.navigate_menu()
         if menu_outcome is MenuOutcome.HUMAN:
             return await _converse(request, target, session, extraction, cache, started_at)
         if menu_outcome is MenuOutcome.HOLD:
-            hold_outcome = await _wait_on_hold(session, hold_abandon_seconds)
+            hold_outcome, hold_seconds = await _wait_on_hold(session, hold_abandon_seconds)
             if hold_outcome is HoldOutcome.ABANDONED:
-                return _reach_failure(target, ReachFailure.HOLD_ABANDONED, started_at)
-            return await _converse(request, target, session, extraction, cache, started_at)
+                return _reach_failure(
+                    target, ReachFailure.HOLD_ABANDONED, started_at, hold_seconds=hold_seconds
+                )
+            return await _converse(
+                request, target, session, extraction, cache, started_at, hold_seconds=hold_seconds
+            )
         # CALLBACK_OFFERED: take it and hang up now to stop the meter — the
         # cost-saver from CLAUDE.md's Cache + Cost Architecture. Resuming on
         # the inbound callback into CONVERSE is P1 (needs inbound routing);

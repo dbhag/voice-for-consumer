@@ -34,6 +34,14 @@ class VoiceCallSession(Protocol):
     follow-up handling under the hard rule) once `converse()` is invoked
     with the disclosure + primary question + context brief — we never
     code a manual turn-by-turn dialogue loop ourselves.
+
+    Not every platform can honor that division cleanly: some (e.g. Retell)
+    run the whole call — including whatever would-be converse() content —
+    as one atomic operation kicked off at start_call() time, with no
+    mid-call checkpoint to defer disclosure/context to. Such adapters may
+    find converse()'s arguments moot by the time it's invoked (the call
+    already happened) — see engine/providers/retell.py for the concrete
+    case and how it's handled without breaking this Protocol's shape.
     """
 
     async def classify(self) -> ClassifyAnswer: ...
@@ -52,7 +60,13 @@ class VoiceCallSession(Protocol):
 
 
 class VoicePlatformProvider(Protocol):
-    async def start_call(self, phone_number: str) -> VoiceCallSession: ...
+    """`request` is the job's full Request (ask/return_fields/context/
+    targets) — real adapters that must front-load context at call-creation
+    time (rather than at the later converse() step) need it here; mock/
+    simple adapters are free to ignore it.
+    """
+
+    async def start_call(self, request: Request, phone_number: str) -> VoiceCallSession: ...
 
 
 class PreCallBriefProvider(Protocol):

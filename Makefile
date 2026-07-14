@@ -1,7 +1,13 @@
-.PHONY: setup api worker run test test-prompts test-integration dashboard lint
+.PHONY: setup db-setup api worker run test test-prompts test-integration dashboard lint dev
+
+dev:
+	./dev.sh
 
 setup:
 	uv venv && uv pip install -e ".[dev]"
+
+db-setup:
+	./scripts/db_setup.sh
 
 api:
 	uvicorn app.main:app --reload
@@ -25,4 +31,4 @@ dashboard:
 	cd dashboard && npm run dev
 
 lint:
-	mypy app/ engine/ verticals/ && ruff check app/ engine/ verticals/
+	mypy app/ engine/ && ruff check app/ engine/

@@ -28,6 +28,7 @@ from engine.models import (
     TranscriptTurn,
 )
 from engine.pre_call_brief import missing_context_fields
+from engine.providers.hard_rule_audit import AuditResult
 
 
 @dataclass
@@ -149,7 +150,10 @@ class MockVoiceCallSession:
 
 
 class MockVoicePlatformProvider:
-    async def start_call(self, phone_number: str) -> MockVoiceCallSession:
+    async def start_call(self, request: Request, phone_number: str) -> MockVoiceCallSession:
+        # Scenarios are canned by phone number for the demo — request isn't
+        # needed here, unlike a real adapter that must front-load it (see
+        # engine/providers/base.py's VoicePlatformProvider docstring).
         return MockVoiceCallSession(SCENARIOS.get(phone_number, DEFAULT_SCENARIO))
 
 
@@ -207,3 +211,20 @@ class MockExtractionProvider:
             return ground_field(None, None, reason="not mentioned on the call")
 
         return ground_field(human_turns[-1].text, human_turns[-1].text)
+
+
+class MockHardRuleAuditProvider:
+    """Deterministic stand-in for `engine.providers.hard_rule_audit
+    .LLMHardRuleAuditProvider` — canned result, no LLM call. Used by tests
+    and by `app.cli report` when no real audit provider is configured is
+    NOT this class; that case reports "not audited" instead of silently
+    defaulting to clean — see app/providers.py.
+    """
+
+    def __init__(self, result: AuditResult | None = None) -> None:
+        self._result = result or AuditResult(clean=True)
+
+    async def audit(
+        self, transcript: list[TranscriptTurn], context: dict[str, object]
+    ) -> AuditResult:
+        return self._result

@@ -52,6 +52,7 @@ async def submit_job(
         "run_job_task",
         job_id,
         body.request.model_dump(mode="json"),
+        body.hint_pack,
         body.notify_email,
         _job_id=job_id,
     )
