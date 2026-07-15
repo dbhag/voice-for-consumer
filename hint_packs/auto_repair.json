@@ -1,4 +1,9 @@
 {
+  "match_keywords": [
+    "car", "auto", "vehicle", "mechanic", "brake", "tire", "oil change",
+    "engine", "transmission", "muffler", "exhaust", "alignment", "battery",
+    "windshield", "check engine"
+  ],
   "likely_follow_up_fields": [
     {"key": "car", "prompt": "Shops will likely ask for your car's year, make, and model — add this?"},
     {"key": "mileage", "prompt": "Shops will likely ask for your mileage — add this?"},

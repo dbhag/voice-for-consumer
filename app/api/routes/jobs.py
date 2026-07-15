@@ -16,7 +16,7 @@ from app.api.deps import get_arq_pool, get_session
 from app.config import settings
 from app.db import repository
 from app.providers import build_provider_bundle
-from engine.hint_packs import load_hint_pack
+from engine.hint_packs import load_hint_pack, select_hint_pack
 from engine.models import Request
 
 router = APIRouter()
@@ -37,9 +37,30 @@ async def submit_job(
     session: AsyncSession = Depends(get_session),
     arq_pool: ArqRedis = Depends(get_arq_pool),
 ) -> dict[str, Any]:
-    hint_pack = load_hint_pack(body.hint_pack) if body.hint_pack else None
+    # The caller (dashboard) never names a pack explicitly — resolved from
+    # the ask so the form doesn't have to expose internal hint-pack naming.
+    # An explicit body.hint_pack (CLI/API callers) still wins if given.
+    hint_pack_name = body.hint_pack or select_hint_pack(body.request.ask)
+    hint_pack = load_hint_pack(hint_pack_name) if hint_pack_name else None
     providers = build_provider_bundle(settings)
     brief = await providers.pre_call_brief.build_brief(body.request, hint_pack)
+
+    request = body.request
+    if brief.dropped_context_keys:
+        # A context value the brief judged to be a non-answer ("not sure",
+        # "n/a"...) must never reach the call as a stated fact — dropped
+        # unconditionally, regardless of which branch below runs, so it's
+        # true for every path a job can be created through. See
+        # engine/models.py's PreCallBrief.dropped_context_keys.
+        request = request.model_copy(
+            update={
+                "context": {
+                    k: v
+                    for k, v in request.context.items()
+                    if k not in brief.dropped_context_keys
+                }
+            }
+        )
 
     # Missing needed context -> surfaced before any call, per CLAUDE.md's
     # acceptance criteria — no job is created until acknowledged.
@@ -47,12 +68,12 @@ async def submit_job(
         return {"status": "needs_context", "brief": brief.model_dump(mode="json")}
 
     job_id = str(uuid4())
-    await repository.create_job(session, job_id, body.request, body.hint_pack, body.notify_email)
+    await repository.create_job(session, job_id, request, hint_pack_name, body.notify_email)
     await arq_pool.enqueue_job(
         "run_job_task",
         job_id,
-        body.request.model_dump(mode="json"),
-        body.hint_pack,
+        request.model_dump(mode="json"),
+        hint_pack_name,
         body.notify_email,
         _job_id=job_id,
     )
@@ -64,10 +85,11 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)) -> 
     status_and_result = await repository.get_job(session, job_id)
     if status_and_result is None:
         raise HTTPException(status_code=404, detail="job not found")
-    status, result = status_and_result
+    status, error, result = status_and_result
     return {
         "job_id": job_id,
         "status": status,
+        "error": error,
         "request": result.request.model_dump(mode="json") if result else None,
         "results": [r.model_dump(mode="json") for r in result.results] if result else None,
     }

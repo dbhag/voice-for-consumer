@@ -21,9 +21,13 @@ class JobRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
-    # "queued" | "running" | "done" — set by the worker at each stage so
-    # GET /jobs/{id} can report progress before results exist.
+    # "queued" | "running" | "done" | "failed" — set by the worker at each
+    # stage so GET /jobs/{id} can report progress before results exist.
+    # "failed" (set from run_job_task's except clause) is what stops a job
+    # that dies mid-run from looking identical to a slow-but-healthy one
+    # forever — see app/queue/tasks.py.
     status: Mapped[str] = mapped_column(String, nullable=False, default="queued")
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
     hint_pack_name: Mapped[str | None] = mapped_column(String, nullable=True)
     notify_email: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

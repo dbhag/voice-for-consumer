@@ -53,11 +53,12 @@ export type SubmitJobResponse =
   | { status: "needs_context"; brief: PreCallBrief }
   | { status: "queued"; job_id: string };
 
-export type JobStatus = "queued" | "running" | "done";
+export type JobStatus = "queued" | "running" | "done" | "failed";
 
 export type JobDetail = {
   job_id: string;
   status: JobStatus;
+  error: string | null;
   request: RequestPayload | null;
   results: CallResult[] | null;
 };

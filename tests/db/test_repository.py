@@ -58,8 +58,9 @@ async def test_create_job_then_get_job_before_results_reports_queued(
         status_and_result = await repository.get_job(session, "job-1")
 
     assert status_and_result is not None
-    status, result = status_and_result
+    status, error, result = status_and_result
     assert status == "queued"
+    assert error is None
     assert result is None
 
 
@@ -108,7 +109,7 @@ async def test_full_lifecycle_round_trips_every_terminal_state(
 
     async with session_factory() as session:
         mid_flight = await repository.get_job(session, "job-2")
-        assert mid_flight == ("running", None)
+        assert mid_flight == ("running", None, None)
 
     async with session_factory() as session:
         await repository.save_job_result(
@@ -119,8 +120,9 @@ async def test_full_lifecycle_round_trips_every_terminal_state(
         status_and_result = await repository.get_job(session, "job-2")
 
     assert status_and_result is not None
-    status, result = status_and_result
+    status, error, result = status_and_result
     assert status == "done"
+    assert error is None
     assert result is not None
     assert result.request.ask == sample_request.ask
     assert {r.target for r in result.results} == {
@@ -138,6 +140,20 @@ async def test_full_lifecycle_round_trips_every_terminal_state(
     assert got_info.fields["price"].value == 220.0
     assert got_info.fields["price"].source_span == "It's $220."
     assert got_info.transcript[0].text == "It's $220."
+
+
+async def test_mark_failed_sets_status_and_error_and_stops_looking_like_running(
+    session_factory, sample_request: Request
+) -> None:
+    async with session_factory() as session:
+        await repository.create_job(session, "job-3", sample_request, None, None)
+        await repository.mark_running(session, "job-3")
+        await repository.mark_failed(session, "job-3", "BadRequestError: invalid schema")
+
+    async with session_factory() as session:
+        status_and_result = await repository.get_job(session, "job-3")
+
+    assert status_and_result == ("failed", "BadRequestError: invalid schema", None)
 
 
 async def test_list_jobs_orders_most_recent_first(session_factory, sample_request: Request) -> None:

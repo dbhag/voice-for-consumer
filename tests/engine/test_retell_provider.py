@@ -202,6 +202,81 @@ async def test_poll_timeout_is_treated_as_no_connect_not_an_infinite_hang() -> N
     assert await session.classify() is ClassifyAnswer.VM_NO_ANSWER_BUSY
 
 
+async def test_waits_for_call_analysis_after_status_ends_before_returning() -> None:
+    # Retell's docs: call_analysis populates *asynchronously* after
+    # call_status hits "ended" (delivered via the call_analyzed webhook
+    # once ready) — verified 2026-07-14 against docs.retellai.com, not
+    # assumed. Reading call_analysis the instant call_status flips would
+    # silently read an empty refused_to_quote/cost on real calls. This
+    # reproduces that: status ends with no call_analysis for two polls,
+    # then it shows up — classify()/converse() must reflect the version
+    # with analysis, not the earlier bare one.
+    poll_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/create-phone-call":
+            return _create_call_response()
+        poll_count["n"] += 1
+        if poll_count["n"] < 3:
+            return httpx.Response(
+                200, json={"call_id": "call_123", "call_status": "ended", "call_analysis": {}}
+            )
+        return httpx.Response(
+            200,
+            json=_ended_call_record(
+                custom_analysis_data={
+                    "refused_to_quote": True,
+                    "refusal_reason": "business does not quote by phone",
+                }
+            ),
+        )
+
+    provider = RetellVoicePlatformProvider(
+        api_key="k",
+        from_number="+15551110000",
+        http_client=_client(handler),
+        poll_interval_seconds=0.001,
+        poll_timeout_seconds=5,
+        analysis_poll_timeout_seconds=5,
+    )
+    request = _sample_request()
+    session = await provider.start_call(request, "+15550000001")
+    await session.classify()
+
+    outcome = await session.converse("disclosure", request.ask, request.context)
+
+    assert poll_count["n"] == 3
+    assert outcome.refused is True
+    assert outcome.refusal_reason == "business does not quote by phone"
+
+
+async def test_analysis_poll_timeout_proceeds_without_analysis_rather_than_hang() -> None:
+    # call_status is "ended" from the first poll onward but call_analysis
+    # never arrives — must give up after analysis_poll_timeout_seconds and
+    # proceed with what it has, not block the job forever.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/create-phone-call":
+            return _create_call_response()
+        return httpx.Response(
+            200, json={"call_id": "call_123", "call_status": "ended", "call_analysis": {}}
+        )
+
+    provider = RetellVoicePlatformProvider(
+        api_key="k",
+        from_number="+15551110000",
+        http_client=_client(handler),
+        poll_interval_seconds=0.001,
+        poll_timeout_seconds=5,
+        analysis_poll_timeout_seconds=0.005,
+    )
+    request = _sample_request()
+    session = await provider.start_call(request, "+15550000001")
+
+    assert await session.classify() is ClassifyAnswer.HUMAN
+    outcome = await session.converse("disclosure", request.ask, request.context)
+    assert outcome.refused is False
+
+
 async def test_refused_read_from_custom_analysis_data() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v2/create-phone-call":
@@ -263,6 +338,7 @@ async def test_navigate_menu_wait_on_hold_and_request_callback_raise() -> None:
         call_id="call_123",
         poll_interval_seconds=1,
         poll_timeout_seconds=1,
+        analysis_poll_timeout_seconds=1,
     )
 
     with pytest.raises(RuntimeError, match="unreachable for Retell"):

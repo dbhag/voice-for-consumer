@@ -21,6 +21,7 @@ class _BriefResult(BaseModel):
     return_fields: list[str]
     likely_follow_ups: list[str]
     missing_context: list[MissingContext]
+    dropped_context_keys: list[str]
 
 
 class LLMPreCallBriefProvider:
@@ -50,6 +51,7 @@ class LLMPreCallBriefProvider:
             return_fields=raw.return_fields,
             likely_follow_ups=raw.likely_follow_ups,
             missing_context=raw.missing_context,
+            dropped_context_keys=raw.dropped_context_keys,
         )
 
     async def _build_openai(self, system_prompt: str, user_prompt: str) -> _BriefResult:

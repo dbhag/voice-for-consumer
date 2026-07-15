@@ -58,15 +58,28 @@ async def run_job_task(
     async with session_factory() as session:
         await repository.mark_running(session, job_id)
 
-    providers = build_provider_bundle(settings, hint_pack)
-    job_result = await run_job(
-        request,
-        providers,
-        ctx["cache"],
-        settings.concurrency_cap,
-        settings.job_minute_budget,
-        settings.hold_abandon_seconds,
-    )
+    try:
+        providers = build_provider_bundle(settings, hint_pack)
+        job_result = await run_job(
+            request,
+            providers,
+            ctx["cache"],
+            settings.concurrency_cap,
+            settings.job_minute_budget,
+            settings.hold_abandon_seconds,
+        )
+    except Exception as exc:
+        # Caught, not re-raised: arq's default retry-on-exception would
+        # re-run this whole job — including any calls that already
+        # connected and cost real money — for a failure that happened
+        # *after* the call (e.g. extraction). A dead job must be visible
+        # (status="failed", not stuck at "running" forever), but silently
+        # re-dialing a business because our own code broke afterward would
+        # be worse. Retrying is a job-submission-time decision for a human,
+        # not an automatic one here.
+        async with session_factory() as session:
+            await repository.mark_failed(session, job_id, f"{type(exc).__name__}: {exc}")
+        return
 
     async with session_factory() as session:
         await repository.save_job_result(session, job_id, job_result)

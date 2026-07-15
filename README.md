@@ -114,6 +114,20 @@ TEST_DATABASE_URL=postgresql+asyncpg://proxy:proxy@localhost:5432/proxy \
 
 *(placeholder — to be written)*
 
+**Structural limit, not a bug: the hard rule can't catch a wrong fact, only a fabricated
+one.** The pre-call brief (`engine/pre_call_brief.py`'s `detect_non_answer_context`,
+`engine/providers/llm_pre_call_brief.py`) now drops context values that read as a
+non-answer ("not sure", "n/a"...) before they ever reach a call — see the hard-rule
+findings below for what that does and doesn't cover. It stops "not sure" from being
+spoken as if it were the customer's actual answer. It does nothing for a value the user
+typed *confidently and wrong* — 82,000 miles keyed in for a car that actually has
+120,000. That string is indistinguishable from a real fact to the brief, the agent, and
+the hard rule alike; all three trust the context bundle by design (CLAUDE.md: the hard
+rule stops the agent from *inventing* a fact, not from repeating a bad one it was
+handed). Catching that would need external verification against a source of truth the
+system doesn't have — out of scope for v1, worth stating plainly rather than implying
+"hard rule" covers more than it does.
+
 ## Known tradeoffs from the build-vs-buy decision
 
 Engine, cache, hard rule, pre-call brief, cost guardrails (concurrency cap, per-job

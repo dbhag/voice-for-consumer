@@ -22,13 +22,21 @@ from engine.prompts import load_prompt
 
 
 class _FieldExtraction(BaseModel):
+    # field_name lives on each item, not as a dict key, because OpenAI's
+    # Structured Outputs strict mode requires every object's properties to
+    # be fully enumerable up front — a dict[str, X] with return_fields'
+    # arbitrary/dynamic keys has no fixed property list and gets rejected
+    # (400: "'required' is required to be ... an array including every key
+    # in properties" — a real 2026-07-14 production failure, not a guess).
+    # A list of objects keeps the schema strict-mode legal.
+    field_name: str
     value: str | float | bool | None
     source_span: str | None
     reason: str | None = None
 
 
 class _ExtractionResult(BaseModel):
-    fields: dict[str, _FieldExtraction]
+    fields: list[_FieldExtraction]
 
 
 class LLMExtractionProvider:
@@ -52,8 +60,8 @@ class LLMExtractionProvider:
             raw = await self._extract_anthropic(system_prompt, user_prompt)
 
         return {
-            field: ground_field(f.value, f.source_span, reason=f.reason)
-            for field, f in raw.fields.items()
+            f.field_name: ground_field(f.value, f.source_span, reason=f.reason)
+            for f in raw.fields
         }
 
     async def _extract_openai(self, system_prompt: str, user_prompt: str) -> _ExtractionResult:

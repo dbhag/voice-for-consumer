@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://proxy:proxy@localhost:5432/proxy"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Comma-separated allowed origins for the dashboard's browser-side fetch
+    # calls (app/main.py's CORSMiddleware). dev.sh derives this from
+    # DASHBOARD_PORT so it stays correct if that port is overridden.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     # Async completion ping (CLAUDE.md's Stack table: "SMS (Twilio) or
     # email"). "mock" backs app.notifications.MockNotificationProvider;
     # "email" sends for real via stdlib smtplib.

@@ -126,6 +126,73 @@ async def test_missing_context_is_surfaced_before_any_job_is_created(
     assert (await client.get("/jobs")).json() == []
 
 
+async def test_non_answer_for_known_field_is_surfaced_then_dropped_on_submit(
+    client: AsyncClient, fake_arq_pool: ArqRedis, sqlite_session_factory
+) -> None:
+    # "not sure" for mileage: auto_repair's hint pack has a real prompt for
+    # "mileage", so the brief should resurface it (the user could plausibly
+    # go check) rather than silently dropping it with no chance to fix it.
+    context = {"car": "2018 Honda Civic", "mileage": "not sure"}
+
+    response = await client.post(
+        "/jobs",
+        json={"request": _auto_repair_request(context=context), "hint_pack": "auto_repair"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "needs_context"
+    assert "mileage" in [m["field"] for m in body["brief"]["missing_context"]]
+
+    # Submit anyway — the non-answer must never reach the job's context,
+    # even on the acknowledge_missing_context path.
+    response = await client.post(
+        "/jobs",
+        json={
+            "request": _auto_repair_request(context=context),
+            "hint_pack": "auto_repair",
+            "acknowledge_missing_context": True,
+        },
+    )
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    await _drain_queue(fake_arq_pool, sqlite_session_factory)
+
+    done = (await client.get(f"/jobs/{job_id}")).json()
+    assert done["status"] == "done"
+    assert "mileage" not in done["request"]["context"]
+    assert done["request"]["context"]["car"] == "2018 Honda Civic"
+
+
+async def test_non_answer_for_unknown_field_is_dropped_silently_without_blocking_submit(
+    client: AsyncClient, fake_arq_pool: ArqRedis, sqlite_session_factory
+) -> None:
+    # "insurance_provider" isn't in auto_repair's hint pack — nothing
+    # sensible to re-ask, so this must drop silently and NOT block
+    # submission the way a resurfaced field does.
+    context = {
+        "car": "2018 Honda Civic",
+        "mileage": 82000,
+        "symptom": "squealing",
+        "insurance_provider": "n/a",
+    }
+
+    response = await client.post(
+        "/jobs",
+        json={"request": _auto_repair_request(context=context), "hint_pack": "auto_repair"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    job_id = body["job_id"]
+
+    await _drain_queue(fake_arq_pool, sqlite_session_factory)
+
+    done = (await client.get(f"/jobs/{job_id}")).json()
+    assert "insurance_provider" not in done["request"]["context"]
+    assert done["request"]["context"]["car"] == "2018 Honda Civic"
+
+
 async def test_full_job_lifecycle_submit_drain_and_read_back(
     fake_arq_pool: ArqRedis, sqlite_session_factory
 ) -> None:

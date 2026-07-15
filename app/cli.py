@@ -102,9 +102,10 @@ def report(job_id: str, database_url: str | None) -> None:
         if status_and_result is None:
             click.echo(f"No such job: {job_id}", err=True)
             return None
-        status, job_result = status_and_result
+        status, error, job_result = status_and_result
         if job_result is None:
-            click.echo(f"Job {job_id} is not done yet (status: {status})", err=True)
+            detail = f" — {error}" if status == "failed" and error else ""
+            click.echo(f"Job {job_id} is not done yet (status: {status}{detail})", err=True)
             return None
 
         audit_provider = build_hard_rule_audit_provider(settings)

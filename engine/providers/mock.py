@@ -27,7 +27,7 @@ from engine.models import (
     Request,
     TranscriptTurn,
 )
-from engine.pre_call_brief import missing_context_fields
+from engine.pre_call_brief import detect_non_answer_context, missing_context_fields
 from engine.providers.hard_rule_audit import AuditResult
 
 
@@ -166,11 +166,16 @@ class MockPreCallBriefProvider:
             if hint_pack
             else []
         )
+        non_answer_missing, dropped_context_keys = detect_non_answer_context(
+            request.context, hint_pack
+        )
         return PreCallBrief(
             primary_question=request.ask,
             return_fields=request.return_fields,
             likely_follow_ups=likely_follow_ups,
-            missing_context=missing_context_fields(request.context, hint_pack),
+            missing_context=missing_context_fields(request.context, hint_pack)
+            + non_answer_missing,
+            dropped_context_keys=dropped_context_keys,
         )
 
 

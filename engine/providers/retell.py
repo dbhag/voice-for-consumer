@@ -176,30 +176,51 @@ class RetellVoiceCallSession:
         call_id: str,
         poll_interval_seconds: float,
         poll_timeout_seconds: float,
+        analysis_poll_timeout_seconds: float,
     ) -> None:
         self._client = client
         self._call_id = call_id
         self._poll_interval_seconds = poll_interval_seconds
         self._poll_timeout_seconds = poll_timeout_seconds
+        self._analysis_poll_timeout_seconds = analysis_poll_timeout_seconds
         self._call_record: dict[str, Any] | None = None
 
     async def _fetch_finished_call(self) -> dict[str, Any]:
+        # Verified against Retell's live get-call docs (docs.retellai.com):
+        # call_status hits "ended"/"error" the moment the call disconnects,
+        # but call_analysis (custom_analysis_data — our refused_to_quote/
+        # refusal_reason — plus call_summary, cost) is populated
+        # *asynchronously* afterward ("Available after call ends. Subscribe
+        # to call_analyzed webhook... once ready."). Returning the instant
+        # call_status flips would read an empty call_analysis and silently
+        # misreport "not refused" / cost None on every call. So: once ended,
+        # keep polling for call_analysis specifically, bounded by its own
+        # shorter timeout — best-effort, not another indefinite wait.
         elapsed = 0.0
+        ended_record: dict[str, Any] | None = None
+        ended_elapsed = 0.0
         while True:
             response = await self._client.get(f"/v2/get-call/{self._call_id}")
             response.raise_for_status()
             record: dict[str, Any] = response.json()
             if record.get("call_status") in _ENDED_CALL_STATUSES:
-                return record
+                if ended_record is None:
+                    ended_elapsed = elapsed
+                ended_record = record
+                if record.get("call_analysis"):
+                    return record
+                if elapsed - ended_elapsed >= self._analysis_poll_timeout_seconds:
+                    return record
             if elapsed >= self._poll_timeout_seconds:
                 # Not a Retell-reported outcome — our own safety net so a
                 # stuck call can't hang this coroutine forever. Treated as a
                 # no-connect rather than raising, so the job keeps moving;
                 # see the module docstring re: this not being the same
                 # guardrail as engine.call_loop's hold_abandon_seconds.
-                record["call_status"] = "ended"
-                record["disconnection_reason"] = "registered_call_timeout"
-                return record
+                fallback = ended_record or record
+                fallback["call_status"] = "ended"
+                fallback["disconnection_reason"] = "registered_call_timeout"
+                return fallback
             await asyncio.sleep(self._poll_interval_seconds)
             elapsed += self._poll_interval_seconds
 
@@ -296,12 +317,14 @@ class RetellVoicePlatformProvider:
         http_client: httpx.AsyncClient | None = None,
         poll_interval_seconds: float = 3.0,
         poll_timeout_seconds: float = 600.0,
+        analysis_poll_timeout_seconds: float = 30.0,
     ) -> None:
         self._from_number = from_number
         self._agent_id = agent_id
         self._hint_pack = hint_pack
         self._poll_interval_seconds = poll_interval_seconds
         self._poll_timeout_seconds = poll_timeout_seconds
+        self._analysis_poll_timeout_seconds = analysis_poll_timeout_seconds
         self._client = http_client or httpx.AsyncClient(
             base_url=base_url or DEFAULT_BASE_URL,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -321,5 +344,9 @@ class RetellVoicePlatformProvider:
         call_id: str = response.json()["call_id"]
 
         return RetellVoiceCallSession(
-            self._client, call_id, self._poll_interval_seconds, self._poll_timeout_seconds
+            self._client,
+            call_id,
+            self._poll_interval_seconds,
+            self._poll_timeout_seconds,
+            self._analysis_poll_timeout_seconds,
         )

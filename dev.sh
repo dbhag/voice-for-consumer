@@ -46,6 +46,10 @@ DASHBOARD_PORT="${DASHBOARD_PORT:-3000}"
 # fakeredis TCP server it starts below, never a real Redis.
 export REDIS_URL="redis://${FAKEREDIS_HOST}:${FAKEREDIS_PORT}/0"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://${API_HOST}:${API_PORT}}"
+# Derived from DASHBOARD_PORT, not hardcoded, so a custom port still gets a
+# working CORS allowlist on the API (app/main.py's CORSMiddleware) instead
+# of a silent "Failed to fetch" in the browser.
+export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:${DASHBOARD_PORT},http://127.0.0.1:${DASHBOARD_PORT}}"
 
 if [ "$DEV_MOCK" = "1" ]; then
   export VOICE_PLATFORM_PROVIDER=mock

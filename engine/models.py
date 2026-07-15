@@ -8,16 +8,27 @@ anywhere in engine/.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Boundaries(BaseModel):
     read_only: bool = True
     do_not_share: list[str] = Field(default_factory=list)
+
+
+def _normalize_field_name(raw: str) -> str:
+    """Turns plain-language field names ("earliest availability") into the
+    snake_case keys extraction/results use ("earliest_availability") —
+    mechanical/deterministic, not an LLM call, so a caller (the dashboard)
+    never has to know or type the machine-readable form.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+    return slug or raw
 
 
 class Request(BaseModel):
@@ -33,6 +44,11 @@ class Request(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     boundaries: Boundaries = Field(default_factory=Boundaries)
     targets: list[str]
+
+    @field_validator("return_fields")
+    @classmethod
+    def _normalize_return_fields(cls, value: list[str]) -> list[str]:
+        return [_normalize_field_name(v) for v in value]
 
 
 class TranscriptTurn(BaseModel):
@@ -139,6 +155,16 @@ class PreCallBrief(BaseModel):
     return_fields: list[str]
     likely_follow_ups: list[str]
     missing_context: list[MissingContext] = Field(default_factory=list)
+    # Context keys the brief judged to hold a non-answer ("not sure",
+    # "n/a"...) rather than a stated fact. Must never reach the call — the
+    # hard rule stops the agent from *inventing* a fact, but a context
+    # bundle that already contains a non-fact needs stopping earlier than
+    # that. A key here that's also in missing_context is a non-answer the
+    # user could plausibly still resolve (re-prompted); a key here alone
+    # means the brief judged it genuinely unresolvable and nothing more to
+    # ask — see app/api/routes/jobs.py, which drops these before a job is
+    # ever created.
+    dropped_context_keys: list[str] = Field(default_factory=list)
 
 
 class JobResult(BaseModel):

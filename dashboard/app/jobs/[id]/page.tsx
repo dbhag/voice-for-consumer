@@ -88,7 +88,9 @@ export default function JobDetailPage() {
         const detail = await getJob(jobId);
         if (cancelled) return;
         setJob(detail);
-        if (detail.status === "done" && timerRef.current) {
+        // "failed" is terminal too — polling forever on a dead job is
+        // exactly the bug this status exists to prevent.
+        if ((detail.status === "done" || detail.status === "failed") && timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
         }
@@ -107,9 +109,9 @@ export default function JobDetailPage() {
 
   return (
     <main className="page">
-      <p>
-        <Link href="/">&larr; All jobs</Link>
-      </p>
+      <Link href="/" className="back-link">
+        &larr; All jobs
+      </Link>
       <h1>Job {jobId}</h1>
 
       {error && <p className="error">{error}</p>}
@@ -119,8 +121,15 @@ export default function JobDetailPage() {
         <>
           <p>
             Status: <span className={`badge badge-${job.status}`}>{job.status}</span>
-            {job.status !== "done" && " — polling every 2s…"}
+            {(job.status === "queued" || job.status === "running") && " — polling every 2s…"}
           </p>
+
+          {job.status === "failed" && (
+            <div className="banner banner-error">
+              <strong>This job failed before finishing.</strong>
+              {job.error && <p>{job.error}</p>}
+            </div>
+          )}
 
           {job.request && (
             <section className="card">

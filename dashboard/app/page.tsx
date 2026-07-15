@@ -12,6 +12,7 @@ const STATE_LABEL: Record<JobSummary["status"], string> = {
   queued: "Queued",
   running: "Running",
   done: "Done",
+  failed: "Failed",
 };
 
 export default function HomePage() {
@@ -19,17 +20,10 @@ export default function HomePage() {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
 
-  const [ask, setAsk] = useState("quote for front brake pad replacement");
-  const [returnFields, setReturnFields] = useState(
-    "price, parts_vs_labor, earliest_availability"
-  );
-  const [contextRows, setContextRows] = useState<ContextRow[]>([
-    { key: "car", value: "" },
-    { key: "mileage", value: "" },
-    { key: "symptom", value: "" },
-  ]);
+  const [ask, setAsk] = useState("");
+  const [returnFields, setReturnFields] = useState("");
+  const [contextRows, setContextRows] = useState<ContextRow[]>([]);
   const [targets, setTargets] = useState("");
-  const [hintPack, setHintPack] = useState("auto_repair");
   const [notifyEmail, setNotifyEmail] = useState("");
 
   const [missingContext, setMissingContext] = useState<MissingContext[] | null>(null);
@@ -79,13 +73,22 @@ export default function HomePage() {
             .map((t) => t.trim())
             .filter(Boolean),
         },
-        hint_pack: hintPack.trim() || null,
         notify_email: notifyEmail.trim() || null,
         acknowledge_missing_context: acknowledgeMissingContext,
       });
 
       if (response.status === "needs_context") {
         setMissingContext(response.brief.missing_context);
+        // Turn each missing field straight into a fillable context row
+        // (keyed by the field name the brief already resolved) instead of
+        // making the user re-derive and type the key themselves.
+        setContextRows((rows) => {
+          const existingKeys = new Set(rows.map((r) => r.key));
+          const additions = response.brief.missing_context
+            .filter((m) => !existingKeys.has(m.field))
+            .map((m) => ({ key: m.field, value: "" }));
+          return [...rows, ...additions];
+        });
         return;
       }
 
@@ -103,7 +106,7 @@ export default function HomePage() {
       <h1>Proxy</h1>
       <p className="subtitle">Submit calls, get back a ranked, transcript-backed result.</p>
 
-      <section className="card">
+      <section className="card form-card">
         <h2>New job</h2>
         <form
           onSubmit={(e) => {
@@ -113,29 +116,35 @@ export default function HomePage() {
         >
           <label>
             Ask
-            <input value={ask} onChange={(e) => setAsk(e.target.value)} required />
+            <input
+              value={ask}
+              onChange={(e) => setAsk(e.target.value)}
+              placeholder="e.g. quote for front brake pad replacement"
+              required
+            />
           </label>
 
           <label>
-            Return fields (comma-separated)
+            What do you want back? (comma-separated)
             <input
               value={returnFields}
               onChange={(e) => setReturnFields(e.target.value)}
+              placeholder="e.g. price, whether it's mostly parts or labor, earliest availability"
               required
             />
           </label>
 
           <fieldset>
-            <legend>Context</legend>
+            <legend>Context (optional — helps avoid follow-up questions)</legend>
             {contextRows.map((row, i) => (
               <div className="context-row" key={i}>
                 <input
-                  placeholder="key"
+                  placeholder="field name"
                   value={row.key}
                   onChange={(e) => updateContextRow(i, "key", e.target.value)}
                 />
                 <input
-                  placeholder="value"
+                  placeholder={row.key ? `value for ${row.key}` : "value"}
                   value={row.value}
                   onChange={(e) => updateContextRow(i, "value", e.target.value)}
                 />
@@ -157,11 +166,6 @@ export default function HomePage() {
           </label>
 
           <label>
-            Hint pack (optional)
-            <input value={hintPack} onChange={(e) => setHintPack(e.target.value)} />
-          </label>
-
-          <label>
             Notify email (optional)
             <input
               type="email"
@@ -172,7 +176,7 @@ export default function HomePage() {
 
           {missingContext && missingContext.length > 0 && (
             <div className="banner banner-warning">
-              <strong>Shops will likely ask for context you haven&apos;t provided yet:</strong>
+              <strong>You&apos;ll likely be asked for context you haven&apos;t provided yet:</strong>
               <ul>
                 {missingContext.map((m) => (
                   <li key={m.field}>{m.prompt}</li>

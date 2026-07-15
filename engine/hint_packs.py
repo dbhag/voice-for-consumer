@@ -19,3 +19,25 @@ def load_hint_pack(name: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def select_hint_pack(ask: str) -> str | None:
+    """Best-effort hint-pack match against the free-text ask, so a caller
+    (the dashboard) never has to name a pack explicitly. Still data-driven,
+    not a vertical branch: `match_keywords` lives in each pack's own JSON,
+    this just does generic keyword-overlap scoring across whatever packs
+    exist. Returns the pack with the most keyword hits, or None if nothing
+    scores above zero — callers should treat that as "no enrichment
+    available," not an error.
+    """
+    ask_lower = ask.lower()
+    best_name: str | None = None
+    best_score = 0
+    for path in sorted(HINT_PACKS_ROOT.glob("*.json")):
+        pack = json.loads(path.read_text(encoding="utf-8"))
+        keywords: list[str] = pack.get("match_keywords", [])
+        score = sum(1 for kw in keywords if kw.lower() in ask_lower)
+        if score > best_score:
+            best_score = score
+            best_name = path.stem
+    return best_name

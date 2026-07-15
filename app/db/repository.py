@@ -44,6 +44,15 @@ async def mark_running(session: AsyncSession, job_id: str) -> None:
     await session.commit()
 
 
+async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
+    job = await session.get(JobRow, job_id)
+    if job is None:
+        raise ValueError(f"unknown job_id: {job_id}")
+    job.status = "failed"
+    job.error = error
+    await session.commit()
+
+
 async def save_job_result(session: AsyncSession, job_id: str, job_result: JobResult) -> None:
     job = await session.get(JobRow, job_id)
     if job is None:
@@ -88,9 +97,12 @@ def _row_to_call_result(row: CallResultRow) -> CallResult:
     )
 
 
-async def get_job(session: AsyncSession, job_id: str) -> tuple[str, JobResult | None] | None:
-    """Returns (status, JobResult | None) — results are None until status is
-    "done". Returns None outright if job_id doesn't exist (caller 404s).
+async def get_job(
+    session: AsyncSession, job_id: str
+) -> tuple[str, str | None, JobResult | None] | None:
+    """Returns (status, error, JobResult | None) — results are None until
+    status is "done"; error is None unless status is "failed". Returns None
+    outright if job_id doesn't exist (caller 404s).
     """
     stmt = (
         select(JobRow).where(JobRow.id == job_id).options(selectinload(JobRow.call_results))
@@ -99,10 +111,10 @@ async def get_job(session: AsyncSession, job_id: str) -> tuple[str, JobResult | 
     if job is None:
         return None
     if job.status != "done":
-        return job.status, None
+        return job.status, job.error, None
     request = Request.model_validate(job.request)
     results = [_row_to_call_result(row) for row in job.call_results]
-    return job.status, JobResult(request=request, results=rank_results(results))
+    return job.status, None, JobResult(request=request, results=rank_results(results))
 
 
 async def list_jobs(session: AsyncSession, limit: int = 50) -> list[JobRow]:
