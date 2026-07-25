@@ -1,8 +1,6 @@
 # Proxy
 
-## Overview / thesis
-
-*(placeholder — fill with the thesis prose)*
+## Overview
 
 A consumer's outbound voice agent. Proxy calls businesses **on the user's behalf** —
 the opposite of Vapi/Retell/Bland, which arm the business answering the phone. The
