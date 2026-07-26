@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getJob } from "@/lib/api";
-import type { CallResult, JobDetail } from "@/lib/types";
+import type { CallResult, FieldResult, JobDetail } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -13,6 +13,42 @@ const TERMINAL_LABEL: Record<CallResult["terminal_state"], string> = {
   refused: "Refused",
   couldnt_reach: "Couldn't reach",
 };
+
+function humanizeFieldName(name: string): string {
+  const spaced = name.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function costLabel(result: CallResult): string {
+  if (result.from_cache) return "cache";
+  const parts = [`${result.call_minutes.toFixed(2)} min`];
+  if (result.cost_usd !== null) parts.push(`$${result.cost_usd.toFixed(2)}`);
+  return parts.join(" · ");
+}
+
+// The proof layer: source_span already exists on every grounded field
+// (engine/extraction.py's hard-rule guard guarantees it), it just wasn't
+// surfaced. <details>/<summary> keeps expand-to-verify native — no new
+// state, no new library.
+function FieldRow({ name, field }: { name: string; field: FieldResult }) {
+  return (
+    <div className="field-row">
+      <span className="field-name">{humanizeFieldName(name)}</span>
+      {field.value === null ? (
+        <span className="field-value">
+          <em>unknown{field.reason ? ` (${field.reason})` : ""}</em>
+        </span>
+      ) : (
+        <details className="field-value">
+          <summary>{String(field.value)}</summary>
+          <blockquote className="source-span">
+            {field.source_span ?? "no source span recorded"}
+          </blockquote>
+        </details>
+      )}
+    </div>
+  );
+}
 
 function TranscriptCard({ result }: { result: CallResult }) {
   const [open, setOpen] = useState(false);
@@ -48,23 +84,16 @@ function ResultRow({ result }: { result: CallResult }) {
           {result.refusal_reason && <span className="detail"> ({result.refusal_reason})</span>}
         </td>
         <td>{result.completion_level ?? "—"}</td>
-        <td>{result.from_cache ? "cache" : `${result.call_minutes.toFixed(2)} min`}</td>
+        <td>{costLabel(result)}</td>
       </tr>
       <tr>
         <td colSpan={4}>
           {Object.keys(result.fields).length > 0 && (
-            <ul className="fields">
+            <div className="fields">
               {Object.entries(result.fields).map(([name, field]) => (
-                <li key={name}>
-                  <strong>{name}:</strong>{" "}
-                  {field.value === null ? (
-                    <em>unknown{field.reason ? ` (${field.reason})` : ""}</em>
-                  ) : (
-                    String(field.value)
-                  )}
-                </li>
+                <FieldRow key={name} name={name} field={field} />
               ))}
-            </ul>
+            </div>
           )}
           <TranscriptCard result={result} />
         </td>
@@ -112,7 +141,8 @@ export default function JobDetailPage() {
       <Link href="/" className="back-link">
         &larr; All jobs
       </Link>
-      <h1>Job {jobId}</h1>
+      <h1>{job?.request?.ask ?? "Job"}</h1>
+      <p className="job-id">{jobId}</p>
 
       {error && <p className="error">{error}</p>}
       {!job && !error && <p>Loading…</p>}
@@ -129,13 +159,6 @@ export default function JobDetailPage() {
               <strong>This job failed before finishing.</strong>
               {job.error && <p>{job.error}</p>}
             </div>
-          )}
-
-          {job.request && (
-            <section className="card">
-              <h2>Ask</h2>
-              <p>{job.request.ask}</p>
-            </section>
           )}
 
           {job.results && (

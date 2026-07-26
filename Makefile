@@ -22,7 +22,7 @@ test:
 	pytest
 
 test-prompts:
-	pytest tests/prompts -v
+	pytest tests/prompts -v -m integration
 
 test-integration:
 	pytest -m integration

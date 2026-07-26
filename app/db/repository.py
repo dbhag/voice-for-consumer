@@ -53,28 +53,50 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
     await session.commit()
 
 
+def _call_result_row(job_id: str, result: CallResult) -> CallResultRow:
+    return CallResultRow(
+        id=str(uuid4()),
+        job_id=job_id,
+        target=result.target,
+        terminal_state=result.terminal_state.value,
+        completion_level=result.completion_level.value if result.completion_level else None,
+        reach_failure=result.reach_failure.value if result.reach_failure else None,
+        refusal_reason=result.refusal_reason,
+        fields={name: f.model_dump(mode="json") for name, f in result.fields.items()},
+        transcript=[t.model_dump(mode="json") for t in result.transcript],
+        from_cache=result.from_cache,
+        call_minutes=result.call_minutes,
+        cost_usd=result.cost_usd,
+        started_at=result.started_at,
+        ended_at=result.ended_at,
+    )
+
+
+async def save_call_result(session: AsyncSession, job_id: str, result: CallResult) -> None:
+    """Persists one call's result as soon as it finishes, independent of the
+    rest of the job — see run_job_task's on_call_complete callback in
+    app/queue/tasks.py. A crash/timeout after this point loses at most the
+    calls still in flight, not every call that already connected and cost
+    money.
+    """
+    session.add(_call_result_row(job_id, result))
+    await session.commit()
+
+
+async def mark_done(session: AsyncSession, job_id: str) -> None:
+    job = await session.get(JobRow, job_id)
+    if job is None:
+        raise ValueError(f"unknown job_id: {job_id}")
+    job.status = "done"
+    await session.commit()
+
+
 async def save_job_result(session: AsyncSession, job_id: str, job_result: JobResult) -> None:
     job = await session.get(JobRow, job_id)
     if job is None:
         raise ValueError(f"unknown job_id: {job_id}")
     for result in job_result.results:
-        session.add(
-            CallResultRow(
-                id=str(uuid4()),
-                job_id=job_id,
-                target=result.target,
-                terminal_state=result.terminal_state.value,
-                completion_level=result.completion_level.value if result.completion_level else None,
-                reach_failure=result.reach_failure.value if result.reach_failure else None,
-                refusal_reason=result.refusal_reason,
-                fields={name: f.model_dump(mode="json") for name, f in result.fields.items()},
-                transcript=[t.model_dump(mode="json") for t in result.transcript],
-                from_cache=result.from_cache,
-                call_minutes=result.call_minutes,
-                started_at=result.started_at,
-                ended_at=result.ended_at,
-            )
-        )
+        session.add(_call_result_row(job_id, result))
     job.status = "done"
     await session.commit()
 
@@ -91,6 +113,7 @@ def _row_to_call_result(row: CallResultRow) -> CallResult:
             "transcript": row.transcript,
             "from_cache": row.from_cache,
             "call_minutes": row.call_minutes,
+            "cost_usd": row.cost_usd,
             "started_at": row.started_at,
             "ended_at": row.ended_at,
         }

@@ -81,6 +81,7 @@ async def test_full_lifecycle_round_trips_every_terminal_state(
             fields={"price": FieldResult(value=220.0, source_span="It's $220.")},
             transcript=[TranscriptTurn(turn_id=0, speaker="human", text="It's $220.")],
             call_minutes=2.5,
+            cost_usd=0.42,
             started_at=now,
             ended_at=now,
         ),
@@ -140,6 +141,7 @@ async def test_full_lifecycle_round_trips_every_terminal_state(
     assert got_info.fields["price"].value == 220.0
     assert got_info.fields["price"].source_span == "It's $220."
     assert got_info.transcript[0].text == "It's $220."
+    assert got_info.cost_usd == pytest.approx(0.42)
 
 
 async def test_mark_failed_sets_status_and_error_and_stops_looking_like_running(

@@ -8,6 +8,7 @@ tests/demo construct an `arq.worker.Worker` directly with a fakeredis-backed
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import arq.worker
@@ -20,7 +21,7 @@ from app.notifications import build_notification_provider
 from app.providers import build_provider_bundle
 from engine.cache import InMemoryCacheStore
 from engine.hint_packs import load_hint_pack
-from engine.models import Request, TerminalState
+from engine.models import CallResult, Request, TerminalState
 from engine.orchestrator import run_job
 
 
@@ -58,6 +59,10 @@ async def run_job_task(
     async with session_factory() as session:
         await repository.mark_running(session, job_id)
 
+    async def _persist_call_result(result: CallResult) -> None:
+        async with session_factory() as session:
+            await repository.save_call_result(session, job_id, result)
+
     try:
         providers = build_provider_bundle(settings, hint_pack)
         job_result = await run_job(
@@ -67,7 +72,24 @@ async def run_job_task(
             settings.concurrency_cap,
             settings.job_minute_budget,
             settings.hold_abandon_seconds,
+            on_call_complete=_persist_call_result,
         )
+    except asyncio.CancelledError:
+        # WorkerSettings.job_timeout expiring cancels this coroutine —
+        # CancelledError is a BaseException, not an Exception, so it would
+        # otherwise skip the block below entirely and propagate straight
+        # through arq's own asyncio.wait_for. arq's default retry_jobs=True
+        # would then re-enqueue and re-run this whole job from scratch,
+        # re-dialing every target a second time — worse than the stuck-at-
+        # "running" bug this replaces. Swallowing it here (not re-raising)
+        # makes run_job_task return normally from arq's point of view, so
+        # the job is reported done-with-a-result, not retried. Each call
+        # already placed was persisted as it completed via
+        # _persist_call_result above, so only the in-flight call, if any,
+        # is lost — not the whole batch.
+        async with session_factory() as session:
+            await repository.mark_failed(session, job_id, "job exceeded its timeout")
+        return
     except Exception as exc:
         # Caught, not re-raised: arq's default retry-on-exception would
         # re-run this whole job — including any calls that already
@@ -82,7 +104,7 @@ async def run_job_task(
         return
 
     async with session_factory() as session:
-        await repository.save_job_result(session, job_id, job_result)
+        await repository.mark_done(session, job_id)
 
     if notify_email:
         got_info = sum(1 for r in job_result.results if r.terminal_state is TerminalState.GOT_INFO)
@@ -123,3 +145,12 @@ class WorkerSettings:
     on_startup = _on_startup
     on_shutdown = _on_shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    # arq's own default (300s) is unrelated to how long a job can legitimately
+    # run and was silently shorter than settings.job_minute_budget (30 min
+    # default) — a job doing real dialing would get cancelled by arq before
+    # its own budget ever kicked in. Derive from job_minute_budget instead of
+    # a second hardcoded number that can drift out of sync with it; the fixed
+    # buffer covers wall-clock spent on extraction/persistence/notification
+    # after the last call finishes, which job_minute_budget doesn't account
+    # for (it only tracks call_minutes).
+    job_timeout = settings.job_minute_budget * 60 + 60

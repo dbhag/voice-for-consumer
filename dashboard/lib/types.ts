@@ -25,6 +25,7 @@ export type CallResult = {
   transcript: TranscriptTurn[];
   from_cache: boolean;
   call_minutes: number;
+  cost_usd: number | null;
   started_at: string;
   ended_at: string | null;
 };

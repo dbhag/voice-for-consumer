@@ -247,6 +247,26 @@ async def test_full_job_lifecycle_submit_drain_and_read_back(
         app.dependency_overrides.clear()
 
 
+async def test_compound_return_field_is_split_before_the_job_runs(
+    client: AsyncClient, fake_arq_pool: ArqRedis, sqlite_session_factory
+) -> None:
+    # Reproduces the real incident: typing "price and tour availability" as
+    # one return field (no comma) must not survive as one merged field that
+    # extraction has to cram a whole paragraph into.
+    response = await client.post(
+        "/jobs",
+        json={"request": _auto_repair_request(return_fields=["price and tour availability"])},
+    )
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    await _drain_queue(fake_arq_pool, sqlite_session_factory)
+
+    done = (await client.get(f"/jobs/{job_id}")).json()
+    assert done["status"] == "done"
+    assert done["request"]["return_fields"] == ["price", "tour_availability"]
+
+
 async def test_unknown_job_id_is_404(client: AsyncClient) -> None:
     response = await client.get("/jobs/does-not-exist")
     assert response.status_code == 404

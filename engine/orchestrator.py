@@ -5,6 +5,7 @@ CLAUDE.md ("N > cap targets -> no more than cap calls run concurrently").
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from engine.cache import CacheStore
@@ -35,6 +36,7 @@ async def run_job(
     concurrency_cap: int = DEFAULT_CONCURRENCY_CAP,
     job_minute_budget: float | None = None,
     hold_abandon_seconds: float = DEFAULT_HOLD_ABANDON_SECONDS,
+    on_call_complete: Callable[[CallResult], Awaitable[None]] | None = None,
 ) -> JobResult:
     semaphore = asyncio.Semaphore(concurrency_cap)
     # Plain float, not a lock-guarded counter: the increment below runs after
@@ -48,16 +50,23 @@ async def run_job(
         nonlocal minutes_spent
         async with semaphore:
             if job_minute_budget is not None and minutes_spent >= job_minute_budget:
-                return _budget_exceeded_result(target)
-            result = await run_call(
-                request,
-                target,
-                providers.voice_platform,
-                providers.extraction,
-                cache,
-                hold_abandon_seconds,
-            )
-            minutes_spent += result.call_minutes
+                result = _budget_exceeded_result(target)
+            else:
+                result = await run_call(
+                    request,
+                    target,
+                    providers.voice_platform,
+                    providers.extraction,
+                    cache,
+                    hold_abandon_seconds,
+                )
+                minutes_spent += result.call_minutes
+            # Fired per-call, not just at job end, so a caller (e.g. the arq
+            # worker) can persist results incrementally — a mid-job crash or
+            # timeout then loses at most the calls still in flight, not every
+            # call that already connected and cost money.
+            if on_call_complete is not None:
+                await on_call_complete(result)
             return result
 
     results = list(await asyncio.gather(*(_run_one(t) for t in request.targets)))

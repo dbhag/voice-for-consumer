@@ -45,22 +45,31 @@ async def submit_job(
     providers = build_provider_bundle(settings)
     brief = await providers.pre_call_brief.build_brief(body.request, hint_pack)
 
-    request = body.request
-    if brief.dropped_context_keys:
-        # A context value the brief judged to be a non-answer ("not sure",
-        # "n/a"...) must never reach the call as a stated fact — dropped
-        # unconditionally, regardless of which branch below runs, so it's
-        # true for every path a job can be created through. See
-        # engine/models.py's PreCallBrief.dropped_context_keys.
-        request = request.model_copy(
-            update={
-                "context": {
-                    k: v
-                    for k, v in request.context.items()
-                    if k not in brief.dropped_context_keys
-                }
-            }
-        )
+    # A context value the brief judged to be a non-answer ("not sure", "n/a"...)
+    # must never reach the call as a stated fact — dropped unconditionally,
+    # regardless of which branch below runs, so it's true for every path a
+    # job can be created through. See engine/models.py's
+    # PreCallBrief.dropped_context_keys.
+    #
+    # brief.return_fields is the whole point of the brief step (e.g.
+    # splitting a compound ask like "price and tour availability" into
+    # separate facts) — applying it only to the missing-context check below
+    # and then discarding it would make that refinement invisible to the
+    # call that actually runs. Rebuilt via model_validate, not model_copy,
+    # so return_fields goes back through Request's normalizer (snake_case +
+    # compound-split) — model_copy(update=...) skips validators, and the
+    # brief's own field names aren't guaranteed to already be normalized.
+    request = Request.model_validate(
+        {
+            **body.request.model_dump(mode="json"),
+            "context": {
+                k: v
+                for k, v in body.request.context.items()
+                if k not in brief.dropped_context_keys
+            },
+            "return_fields": brief.return_fields or body.request.return_fields,
+        }
+    )
 
     # Missing needed context -> surfaced before any call, per CLAUDE.md's
     # acceptance criteria — no job is created until acknowledged.

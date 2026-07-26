@@ -31,6 +31,21 @@ def _normalize_field_name(raw: str) -> str:
     return slug or raw
 
 
+# Matches the plain-language conjunctions a caller uses to ask for more than
+# one thing in a single return-field entry ("price and tour availability").
+# Must run on the raw, pre-slugified string — once spaces are underscored
+# ("price_and_tour_availability") there's no word boundary left to split on,
+# since "_" counts as a word character. Splitting here, not after
+# slugifying, is what stops a compound entry from becoming one merged field
+# whose extracted "value" is a whole paragraph instead of one fact each.
+_COMPOUND_FIELD_DELIMITERS = re.compile(r"\s*(?:,|&|\bas well as\b|\band\b)\s*", re.IGNORECASE)
+
+
+def _split_compound_field(raw: str) -> list[str]:
+    parts = [p for p in _COMPOUND_FIELD_DELIMITERS.split(raw) if p.strip()]
+    return parts or [raw]
+
+
 class Request(BaseModel):
     """The three-part input: ask + context bundle + targets, plus boundaries.
 
@@ -48,7 +63,9 @@ class Request(BaseModel):
     @field_validator("return_fields")
     @classmethod
     def _normalize_return_fields(cls, value: list[str]) -> list[str]:
-        return [_normalize_field_name(v) for v in value]
+        return [
+            _normalize_field_name(part) for raw in value for part in _split_compound_field(raw)
+        ]
 
 
 class TranscriptTurn(BaseModel):

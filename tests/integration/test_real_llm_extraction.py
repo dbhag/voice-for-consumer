@@ -18,12 +18,12 @@ pytestmark = pytest.mark.integration
 _API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
 
 
-@pytest.mark.skipif(_API_KEY is None, reason="requires OPENAI_API_KEY or ANTHROPIC_API_KEY")
+@pytest.mark.skipif(not _API_KEY, reason="requires OPENAI_API_KEY or ANTHROPIC_API_KEY")
 async def test_llm_extraction_against_sample_transcript() -> None:
     provider_name: Literal["openai", "anthropic"] = (
         "openai" if os.environ.get("OPENAI_API_KEY") else "anthropic"
     )
-    assert _API_KEY is not None
+    assert _API_KEY
 
     transcript = [
         TranscriptTurn(

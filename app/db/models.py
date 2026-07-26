@@ -51,6 +51,12 @@ class CallResultRow(Base):
     transcript: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     from_cache: Mapped[bool] = mapped_column(nullable=False, default=False)
     call_minutes: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    # Real per-call cost when the voice platform reports one — see
+    # engine/models.py's CallResult.cost_usd. Was computed by the Retell
+    # adapter and then dropped on the floor: this column didn't exist, so
+    # every job lost its cost data between the call finishing and the
+    # dashboard trying to show it.
+    cost_usd: Mapped[float | None] = mapped_column(nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

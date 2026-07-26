@@ -131,6 +131,13 @@ h2 {
   color: var(--foreground);
 }
 
+.job-id {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  margin-bottom: 1.75rem;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -377,7 +384,6 @@ tbody tr:hover td {
 }
 
 .fields {
-  list-style: none;
   margin-bottom: 0.6rem;
   font-size: 0.875rem;
   display: flex;
@@ -385,13 +391,59 @@ tbody tr:hover td {
   gap: 0.3rem;
 }
 
-.fields strong {
-  font-weight: 600;
+.field-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
 }
 
-.fields em {
+.field-name {
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 9rem;
+}
+
+.field-value em {
   color: var(--muted);
   font-style: normal;
+}
+
+/* One expandable row per return field — expanding shows the verbatim
+   transcript quote (source_span) the value is grounded in, the proof layer
+   CLAUDE.md calls out (every returned value is backed by the transcript). */
+details.field-value {
+  flex: 1;
+  min-width: 0;
+}
+
+details.field-value summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.field-value summary::-webkit-details-marker {
+  display: none;
+}
+
+details.field-value summary::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-size: 0.75em;
+}
+
+details.field-value[open] summary::before {
+  content: "▾ ";
+}
+
+.source-span {
+  margin: 0.4rem 0 0.15rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
 }
 
 .transcript-card {
