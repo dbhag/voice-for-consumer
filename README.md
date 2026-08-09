@@ -126,6 +126,91 @@ handed). Catching that would need external verification against a source of trut
 system doesn't have — out of scope for v1, worth stating plainly rather than implying
 "hard rule" covers more than it does.
 
+## The `VoicePlatformProvider` seam — and where it leaks
+
+### The seam
+
+`VoicePlatformProvider` (`engine/providers/base.py:62`) is a Protocol with exactly one
+method: `start_call(request, phone_number) -> VoiceCallSession`. It's deliberately thin
+because it marks a **purchase boundary, not a capability boundary**. The vendor
+(Retell/Bland/Vapi) owns telephony + STT + in-call dialogue LLM + TTS + turn-taking as one
+bought product (`base.py:3-7`); the engine never integrates Twilio/Deepgram/Cartesia
+directly. The richer surface — `classify` / `navigate_menu` / `wait_on_hold` /
+`request_callback` / `converse` / `hangup` — lives on `VoiceCallSession` (`base.py:30`),
+which models a single call as a sequence of steps the **caller** drives:
+`engine/call_loop.py`'s state machine calls `classify()`, branches into
+`navigate_menu()` / `wait_on_hold()`, then `converse(DISCLOSURE, ask, context)`
+(`call_loop.py:74`), then `hangup()`.
+
+### Where it leaks
+
+The Protocol assumes the caller drives the session step by step, feeding the disclosure,
+primary question, and context into `converse()` to steer a live conversation. **Retell
+inverts that.** `RetellVoicePlatformProvider.start_call()` (`retell.py:333`) posts one
+`/v2/create-phone-call` with all context front-loaded into `retell_llm_dynamic_variables`
+(`retell.py:337`); the entire conversation is fixed at call-creation time and runs to
+completion inside Retell's own agent before our code observes anything. What the adapter
+does to reconcile that, and what each reconciliation costs:
+
+- **`classify()` is retroactive, not a live check.** `RetellVoiceCallSession.classify()`
+  (`retell.py:227`) calls `_fetch_finished_call()` (`retell.py:188`), which *blocks* —
+  polling `get-call` — until `call_status` is `ended`/`error` and `call_analysis` has
+  populated. It only returns *after the whole call already happened*, and can only ever
+  return `HUMAN` or `VM_NO_ANSWER_BUSY` (`retell.py:231-238`) — never `IVR` or `HOLD`.
+- **Three of the six session methods are unreachable and raise.** Because `classify()`
+  never returns `IVR`/`HOLD`, `navigate_menu()` (`retell.py:240`), `wait_on_hold()`
+  (`retell.py:247`), and `request_callback()` (`retell.py:255`) each `raise RuntimeError`
+  if called. The one real adapter cannot honor half the Protocol it nominally implements.
+  It's a loud failure by design, but the interface advertises capabilities the vendor
+  doesn't provide: the IVR-navigation and callback branches of `call_loop`'s state machine
+  — and the `CALLBACK_PENDING` cost-saver they exist for — are dead code on every real call.
+- **`converse()`'s arguments are ignored.** `call_loop.py:74` passes `DISCLOSURE` (the
+  constant at `call_loop.py:29`), `request.ask`, and `request.context` into `converse()`.
+  `RetellVoiceCallSession.converse()` (`retell.py:261`) accepts all three and uses none of
+  them — the call already ran using whatever `build_dynamic_variables()` baked in at
+  `start_call` (`retell.py:264-267`); it just translates the finished transcript. Concrete
+  footgun: **editing the `DISCLOSURE` constant in `call_loop.py` has zero effect on a
+  Retell call.** The disclosure Retell actually speaks comes from the agent's configured
+  system prompt (`prompts/dialogue/v1/system.txt`, loaded into the Retell dashboard out of
+  band), not from any argument this code passes.
+- **`hangup()` is a no-op** (`retell.py:304`): there's no live call left to hang up by the
+  time the loop reaches it. A caller cannot end a call early through the Protocol.
+- **`hold_abandon_seconds` never engages.** `call_loop`'s hold-abandon cost guardrail
+  wraps `wait_on_hold()`, which is unreachable — so it's inert for Retell (see the
+  mechanism table below). Retell's own `poll_timeout_seconds` (`retell.py:319`, default
+  600s) is a *different* knob; misconfiguring one does not protect the other.
+- **Refusal detection depends on out-of-band vendor config.** `converse()` reads
+  `refused_to_quote` from `call_analysis.custom_analysis_data` (`retell.py:292-296`). That
+  field only exists if the Retell agent was configured — in the Retell dashboard, outside
+  this repo — with a matching custom post-call-analysis schema. If it wasn't, the key is
+  absent and every call silently reads as *not refused* (`retell.py:271-278`); there's no
+  way to distinguish "agent wasn't configured to detect this" from "genuinely wasn't
+  refused" from our side.
+
+Net: for a Retell call the "session" isn't a session — it's a blocking post-mortem reader
+of a call that already finished. `classify()` holds its concurrency-cap slot for the
+call's entire real duration (see Known tradeoffs below), `converse()`'s inputs are inert,
+and four of the six `VoiceCallSession` methods are either no-ops or hard errors.
+
+### What isn't validated
+
+One real provider (Retell) plus a mock (`engine/providers/mock.py`). **Bland and Vapi
+appear only in comments** (`base.py:3`, `mock.py:4`, `app/agent/worker.py`) — named as
+evaluation candidates, never implemented; there is no Bland or Vapi adapter in the repo.
+The full step-driven surface of the Protocol — `classify` returning `IVR`/`HOLD`,
+`navigate_menu`, `wait_on_hold`, `request_callback`, and the `call_loop` branches and
+cost-savers built on them — is exercised **only** by the mock's canned scenarios
+(`mock.py`). It has never run against a real vendor, because the one real vendor can't
+reach it.
+
+The inversion is early evidence the seam may be at the wrong altitude. The Protocol models
+a call as a sequence of steps the caller drives; the one real vendor integrated so far runs
+the call atomically and can only be read after the fact. We cannot yet tell whether that's
+a Retell-specific impedance or a wrong abstraction: with n=1 real adapter there's no way to
+know whether Bland or Vapi would fit the drivable-session shape or invert it the same way.
+If a second real vendor also inverts it, the Protocol is modeling the wrong thing. Until one
+is implemented, that's unverified — flagged, not resolved.
+
 ## Known tradeoffs from the build-vs-buy decision
 
 Engine, cache, hard rule, pre-call brief, cost guardrails (concurrency cap, per-job
