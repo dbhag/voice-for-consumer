@@ -197,11 +197,15 @@ and four of the six `VoiceCallSession` methods are either no-ops or hard errors.
 One real provider (Retell) plus a mock (`engine/providers/mock.py`). **Bland and Vapi
 appear only in comments** (`base.py:3`, `mock.py:4`, `app/agent/worker.py`) — named as
 evaluation candidates, never implemented; there is no Bland or Vapi adapter in the repo.
-The full step-driven surface of the Protocol — `classify` returning `IVR`/`HOLD`,
-`navigate_menu`, `wait_on_hold`, `request_callback`, and the `call_loop` branches and
-cost-savers built on them — is exercised **only** by the mock's canned scenarios
-(`mock.py`). It has never run against a real vendor, because the one real vendor can't
-reach it.
+
+The Retell **happy path** — `classify()` returning `HUMAN`/`VM_NO_ANSWER_BUSY`, then
+`converse()` translating the finished transcript, then extraction — has been run against
+10 real Seattle auto shops (real businesses, not the self-call used earlier). That covers
+only the part of the Protocol the adapter can actually reach. The rest of the step-driven
+surface — `classify` returning `IVR`/`HOLD`, `navigate_menu`, `wait_on_hold`,
+`request_callback`, and the `call_loop` branches and cost-savers built on them — is still
+exercised **only** by the mock's canned scenarios (`mock.py`), and can't be validated
+through Retell at all, because the one real vendor can't reach it (see "Where it leaks").
 
 The inversion is early evidence the seam may be at the wrong altitude. The Protocol models
 a call as a sequence of steps the caller drives; the one real vendor integrated so far runs
