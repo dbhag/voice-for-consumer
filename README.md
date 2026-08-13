@@ -192,7 +192,7 @@ of a call that already finished. `classify()` holds its concurrency-cap slot for
 call's entire real duration (see Known tradeoffs below), `converse()`'s inputs are inert,
 and four of the six `VoiceCallSession` methods are either no-ops or hard errors.
 
-### What isn't validated
+### Progress Update
 
 One real provider (Retell) plus a mock (`engine/providers/mock.py`). **Bland and Vapi
 appear only in comments** (`base.py:3`, `mock.py:4`, `app/agent/worker.py`) — named as
