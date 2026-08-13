@@ -14,8 +14,6 @@ cache, the proof/transcript layer).
 
 ## Architecture
 
-*(placeholder — expand on the engine/provider split and why)*
-
 The engine is vertical-agnostic: there is no vertical logic in code anywhere in
 `engine/`. Per-vertical differences (e.g. "auto repair shops will ask
 year/make/model/mileage") live only as data in `hint_packs/`, never as an `if` branch.
@@ -102,15 +100,7 @@ docker compose up -d postgres
 until docker compose exec postgres pg_isready -U proxy; do sleep 1; done
 TEST_DATABASE_URL=postgresql+asyncpg://proxy:proxy@localhost:5432/proxy \
   pytest tests/db/test_repository.py tests/queue/test_tasks.py tests/api/test_jobs.py
-```
-
-## Results
-
-*(placeholder — real-call completion rate, filled from live Retell calls)*
-
-## Findings & limitations
-
-*(placeholder — to be written)*
+``
 
 **Structural limit, not a bug: the hard rule can't catch a wrong fact, only a fabricated
 one.** The pre-call brief (`engine/pre_call_brief.py`'s `detect_non_answer_context`,
