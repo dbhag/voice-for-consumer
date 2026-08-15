@@ -179,6 +179,22 @@ does to reconcile that, and what each reconciliation costs:
   wraps `wait_on_hold()`, which is unreachable — so it's inert for Retell (see the
   mechanism table below). Retell's own `poll_timeout_seconds` (`retell.py:319`, default
   600s) is a *different* knob; misconfiguring one does not protect the other.
+- **No engine-side lever against in-call hold cost, by construction.** Because Retell
+  runs disclosure/IVR/hold/conversation as one atomic operation with no mid-call
+  checkpoint (see "Could HOLD/IVR/callback be made real for Retell?" below), our code
+  never sees hold happening on a live call and so cannot interrupt or downgrade it. The
+  only real lever today is the Retell agent's own dashboard-configured silence-timeout /
+  max-call-duration setting — outside this repo, same as the disclosure script and
+  `refused_to_quote` schema above. Whether Retell already gates its own LLM turns on
+  detected speech (VAD) rather than polling during pure hold-music silence is unverified.
+  `CallResult.cost_breakdown_usd` (`engine/models.py`, sourced from
+  `call_analysis.call_cost.product_costs` in `retell.py`) gives real per-product cost
+  data per call to check whether hold-driven cost is actually material before spending
+  more effort here — it's a whole-call total, not segmented by conversation state, so it
+  can show which product line (tts/stt/llm/telephony) dominates cost but not isolate
+  hold specifically. If it turns out to be material, the CLAUDE.md-preferred fix is a
+  BYO-component platform (Vapi) for real segment-level control, not extending this
+  adapter further.
 - **Refusal detection depends on out-of-band vendor config.** `converse()` reads
   `refused_to_quote` from `call_analysis.custom_analysis_data` (`retell.py:292-296`). That
   field only exists if the Retell agent was configured — in the Retell dashboard, outside

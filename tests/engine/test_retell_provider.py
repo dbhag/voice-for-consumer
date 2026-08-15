@@ -88,15 +88,19 @@ def _ended_call_record(
     in_voicemail: bool = False,
     transcript_object=None,
     custom_analysis_data=None,
+    call_cost=None,
 ) -> dict:
+    call_analysis = {
+        "in_voicemail": in_voicemail,
+        "custom_analysis_data": custom_analysis_data or {},
+    }
+    if call_cost is not None:
+        call_analysis["call_cost"] = call_cost
     return {
         "call_id": "call_123",
         "call_status": "ended",
         "disconnection_reason": disconnection_reason,
-        "call_analysis": {
-            "in_voicemail": in_voicemail,
-            "custom_analysis_data": custom_analysis_data or {},
-        },
+        "call_analysis": call_analysis,
         "transcript_object": transcript_object or [],
     }
 
@@ -325,6 +329,99 @@ async def test_transfer_target_role_maps_to_human() -> None:
     outcome = await session.converse("disclosure", request.ask, request.context)
 
     assert outcome.transcript[0].speaker == "human"
+
+
+# ---------------------------------------------------------------------------
+# Cost — combined_cost and the per-product breakdown (cents -> USD)
+# ---------------------------------------------------------------------------
+
+
+async def test_cost_usd_and_breakdown_extracted_from_call_cost() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/create-phone-call":
+            return _create_call_response()
+        return httpx.Response(
+            200,
+            json=_ended_call_record(
+                call_cost={
+                    "combined_cost": 42,
+                    "total_duration_seconds": 60,
+                    "total_duration_unit_price": 0.7,
+                    "product_costs": [
+                        {"product": "retell_llm", "unit_price": 0.2, "cost": 12},
+                        {"product": "elevenlabs_tts", "unit_price": 0.3, "cost": 18},
+                        {"product": "twilio_telephony", "unit_price": 0.2, "cost": 12},
+                    ],
+                }
+            ),
+        )
+
+    provider = RetellVoicePlatformProvider(
+        api_key="k", from_number="+15551110000", http_client=_client(handler)
+    )
+    request = _sample_request()
+    session = await provider.start_call(request, "+15550000001")
+    await session.classify()
+
+    outcome = await session.converse("disclosure", request.ask, request.context)
+
+    assert outcome.cost_usd == pytest.approx(0.42)
+    assert outcome.cost_breakdown_usd == {
+        "retell_llm": pytest.approx(0.12),
+        "elevenlabs_tts": pytest.approx(0.18),
+        "twilio_telephony": pytest.approx(0.12),
+    }
+
+
+async def test_cost_breakdown_sums_repeated_product_entries() -> None:
+    # is_transfer_leg_cost can split one product across two entries (a
+    # transferred call has two legs) — both must land in the same total,
+    # not overwrite each other.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/create-phone-call":
+            return _create_call_response()
+        return httpx.Response(
+            200,
+            json=_ended_call_record(
+                call_cost={
+                    "combined_cost": 30,
+                    "product_costs": [
+                        {"product": "twilio_telephony", "cost": 10, "is_transfer_leg_cost": False},
+                        {"product": "twilio_telephony", "cost": 20, "is_transfer_leg_cost": True},
+                    ],
+                }
+            ),
+        )
+
+    provider = RetellVoicePlatformProvider(
+        api_key="k", from_number="+15551110000", http_client=_client(handler)
+    )
+    request = _sample_request()
+    session = await provider.start_call(request, "+15550000001")
+    await session.classify()
+
+    outcome = await session.converse("disclosure", request.ask, request.context)
+
+    assert outcome.cost_breakdown_usd == {"twilio_telephony": pytest.approx(0.30)}
+
+
+async def test_cost_usd_and_breakdown_none_when_call_cost_absent() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/create-phone-call":
+            return _create_call_response()
+        return httpx.Response(200, json=_ended_call_record())
+
+    provider = RetellVoicePlatformProvider(
+        api_key="k", from_number="+15551110000", http_client=_client(handler)
+    )
+    request = _sample_request()
+    session = await provider.start_call(request, "+15550000001")
+    await session.classify()
+
+    outcome = await session.converse("disclosure", request.ask, request.context)
+
+    assert outcome.cost_usd is None
+    assert outcome.cost_breakdown_usd is None
 
 
 # ---------------------------------------------------------------------------

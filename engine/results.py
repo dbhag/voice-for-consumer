@@ -40,6 +40,17 @@ def _fields_by_groundedness(result: CallResult) -> tuple[str, str]:
     return grounded, unknown
 
 
+def _cost_breakdown_for(result: CallResult) -> str:
+    # Per-product total for the whole call (Retell doesn't tag cost by
+    # conversation state — see CallResult.cost_breakdown_usd) — sorted by
+    # product name for a stable, diffable column, not by cost.
+    if not result.cost_breakdown_usd:
+        return "n/a"
+    return ", ".join(
+        f"{product} ${cost:.2f}" for product, cost in sorted(result.cost_breakdown_usd.items())
+    )
+
+
 async def render_job_report_markdown(
     job_id: str, job_result: JobResult, audit_provider: HardRuleAuditProvider | None
 ) -> str:
@@ -58,8 +69,8 @@ async def render_job_report_markdown(
         f'## Job {job_id} — "{job_result.request.ask}"',
         "",
         "| Target | State | Reason | Grounded | Unknown | Hold (s) | Call (min) | Cost |"
-        " Hard-Rule |",
-        "|---|---|---|---|---|---|---|---|---|",
+        " Cost Breakdown | Hard-Rule |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for result in rank_results(job_result.results):
         state = result.terminal_state.value
@@ -68,6 +79,7 @@ async def render_job_report_markdown(
         grounded, unknown = _fields_by_groundedness(result)
         hold = f"{result.hold_seconds:.0f}" if result.hold_seconds is not None else "n/a"
         cost = f"${result.cost_usd:.2f}" if result.cost_usd is not None else "n/a"
+        cost_breakdown = _cost_breakdown_for(result)
 
         if not result.transcript or audit_provider is None:
             hard_rule = "not audited"
@@ -81,7 +93,7 @@ async def render_job_report_markdown(
 
         lines.append(
             f"| {result.target} | {state} | {_reason_for(result)} | {grounded} | {unknown} "
-            f"| {hold} | {result.call_minutes:.2f} | {cost} | {hard_rule} |"
+            f"| {hold} | {result.call_minutes:.2f} | {cost} | {cost_breakdown} | {hard_rule} |"
         )
 
     return "\n".join(lines)

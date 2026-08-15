@@ -85,6 +85,7 @@ async def _converse(
             call_minutes=call_minutes,
             hold_seconds=hold_seconds,
             cost_usd=outcome.cost_usd,
+            cost_breakdown_usd=outcome.cost_breakdown_usd,
             started_at=started_at,
             ended_at=ended_at,
         )
@@ -105,6 +106,7 @@ async def _converse(
         call_minutes=call_minutes,
         hold_seconds=hold_seconds,
         cost_usd=outcome.cost_usd,
+        cost_breakdown_usd=outcome.cost_breakdown_usd,
         started_at=started_at,
         ended_at=ended_at,
     )

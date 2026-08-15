@@ -57,6 +57,10 @@ class CallResultRow(Base):
     # every job lost its cost data between the call finishing and the
     # dashboard trying to show it.
     cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    # See engine/models.py's CallResult.cost_breakdown_usd — same
+    # dropped-on-the-floor risk as cost_usd above, fixed proactively instead
+    # of after the fact.
+    cost_breakdown_usd: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

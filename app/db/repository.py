@@ -67,6 +67,7 @@ def _call_result_row(job_id: str, result: CallResult) -> CallResultRow:
         from_cache=result.from_cache,
         call_minutes=result.call_minutes,
         cost_usd=result.cost_usd,
+        cost_breakdown_usd=result.cost_breakdown_usd,
         started_at=result.started_at,
         ended_at=result.ended_at,
     )
@@ -114,6 +115,7 @@ def _row_to_call_result(row: CallResultRow) -> CallResult:
             "from_cache": row.from_cache,
             "call_minutes": row.call_minutes,
             "cost_usd": row.cost_usd,
+            "cost_breakdown_usd": row.cost_breakdown_usd,
             "started_at": row.started_at,
             "ended_at": row.ended_at,
         }

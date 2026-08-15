@@ -138,6 +138,15 @@ class ConverseOutcome(BaseModel):
     # call_analysis.call_cost). None — not 0.0 — when the platform has no
     # cost signal; never a fabricated estimate.
     cost_usd: float | None = None
+    # Per-product cost breakdown, when the platform reports one (Retell's
+    # call_analysis.call_cost.product_costs — e.g. {"elevenlabs_tts": 0.04,
+    # "retell_llm": 0.02}). Retell prices per-second of connected call time
+    # across the WHOLE call, not per state-machine step — it does not
+    # segment cost by hold vs. conversation, so this cannot isolate "cost
+    # spent on hold" specifically. It can only show which product line
+    # (tts/stt/llm/telephony) dominates a call's total cost. None — not an
+    # empty dict — when the platform has no breakdown signal.
+    cost_breakdown_usd: dict[str, float] | None = None
 
 
 class CallResult(BaseModel):
@@ -158,6 +167,9 @@ class CallResult(BaseModel):
     # converse() reported; None (not 0.0) when no calls reached CONVERSE
     # (e.g. COULDNT_REACH) or the platform has no cost signal.
     cost_usd: float | None = None
+    # See ConverseOutcome.cost_breakdown_usd for exact semantics/limits —
+    # passed through unchanged, same as cost_usd.
+    cost_breakdown_usd: dict[str, float] | None = None
     started_at: datetime
     ended_at: datetime | None = None
 

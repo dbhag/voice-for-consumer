@@ -169,6 +169,35 @@ def _extract_cost_usd(call_record: dict[str, Any]) -> float | None:
     return float(combined_cost_cents) / 100
 
 
+def _extract_cost_breakdown_usd(call_record: dict[str, Any]) -> dict[str, float] | None:
+    """Per-product cost, per https://docs.retellai.com/api-references/get-call
+    — call_analysis.call_cost.product_costs, a list of {product, unit_price,
+    cost} in cents keyed by product name (e.g. "elevenlabs_tts",
+    "retell_llm"). Collapsed to {product: usd}; a product appearing twice
+    (is_transfer_leg_cost splits a transferred call's legs) sums into one
+    total for that product rather than silently dropping the second entry.
+
+    This is a per-call, per-product total — Retell prices per second of
+    connected time across the WHOLE call and does not tag cost by
+    conversation state, so it cannot isolate "cost spent on hold" from
+    "cost spent talking." It can only show which product line dominates
+    total cost. None (not {}) if Retell hasn't attached this data.
+    """
+    product_costs = call_record.get("call_analysis", {}).get("call_cost", {}).get(
+        "product_costs"
+    )
+    if not product_costs:
+        return None
+    breakdown: dict[str, float] = {}
+    for entry in product_costs:
+        product = entry.get("product")
+        cost_cents = entry.get("cost")
+        if product is None or cost_cents is None:
+            continue
+        breakdown[product] = breakdown.get(product, 0.0) + float(cost_cents) / 100
+    return breakdown or None
+
+
 class RetellVoiceCallSession:
     def __init__(
         self,
@@ -299,6 +328,7 @@ class RetellVoiceCallSession:
             refused=refused,
             refusal_reason=refusal_reason,
             cost_usd=_extract_cost_usd(self._call_record),
+            cost_breakdown_usd=_extract_cost_breakdown_usd(self._call_record),
         )
 
     async def hangup(self) -> None:
